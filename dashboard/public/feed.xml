@@ -5,9 +5,17 @@
     <link>https://muslim-lantern-archive.vercel.app</link>
     <description>Live stream archive of The Muslim Lantern. Recorded, mirrored, and chaptered automatically.</description>
     <language>en</language>
-    <lastBuildDate>Sat, 14 Nov 2026 21:51:59 +0000</lastBuildDate>
+    <lastBuildDate>Sat, 14 Nov 2026 22:20:45 +0000</lastBuildDate>
     <generator>generate-feeds.py</generator>
     <image><url>https://muslim-lantern-archive.vercel.app/logo.png</url><title>The Muslim Lantern, Stream Archive</title><link>https://muslim-lantern-archive.vercel.app</link></image>
+    <item>
+      <title>Non-Muslims Question Islam Live! Muhammed Ali 2026-11-15</title>
+      <link>https://muslim-lantern-archive.vercel.app/#/watch/rWw7uqtUmso</link>
+      <guid isPermaLink="false">rWw7uqtUmso</guid>
+      <pubDate>Sat, 14 Nov 2026 22:20:32 +0000</pubDate>
+      <description>Non-Muslims Question Islam Live! Muhammed Ali 2026-11-15, Live stream archive of The Muslim Lantern. Recorded, mirrored, and chaptered automatically.</description>
+      <enclosure url="https://pixeldrain.com/api/file/vTCtfb9W" length="388733232" type="video/mp4"/>
+    </item>
     <item>
       <title>Non-Muslims Question Islam Live! Muhammed Ali 2026-11-14</title>
       <link>https://muslim-lantern-archive.vercel.app/#/watch/tPCLgZ-BbeU</link>
