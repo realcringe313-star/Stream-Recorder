@@ -5,6 +5,17 @@ on:
     workflows: ["Stream Recorder", "Go-live sniper"]
     types: [completed]
   workflow_dispatch:
+    inputs:
+      force_all:
+        description: "Re-upload ALL recordings (even if they already have telegram_link)"
+        required: false
+        type: boolean
+        default: true
+      clean_channel:
+        description: "Delete all old messages from the channel before uploading"
+        required: false
+        type: boolean
+        default: true
 
 concurrency:
   group: telegram-mirror
@@ -19,10 +30,10 @@ jobs:
     if: >
       github.event_name == 'workflow_dispatch' ||
       github.event.workflow_run.conclusion == 'success'
-    timeout-minutes: 300
+    timeout-minutes: 360
 
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -34,6 +45,8 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          FORCE_ALL: ${{ github.event.inputs.force_all || 'false' }}
+          CLEAN_CHANNEL: ${{ github.event.inputs.clean_channel || 'false' }}
         run: |
           python3 << 'PYSCRIPT'
           import json, os, subprocess, sys
@@ -41,101 +54,150 @@ jobs:
           with open("data/recordings.json") as f:
               recs = json.load(f)
 
-          todo = [r for r in recs if not r.get("telegram_link") and (r.get("archive_direct") or r.get("archive_node") or r.get("archive_link"))]
+          force_all = os.environ.get("FORCE_ALL", "false").lower() == "true"
+          clean_channel = os.environ.get("CLEAN_CHANNEL", "false").lower() == "true"
+
+          api_id = os.environ.get("TELEGRAM_API_ID", "")
+          api_hash = os.environ.get("TELEGRAM_API_HASH", "")
+          session = os.environ.get("TELEGRAM_SESSION_STRING", "")
+          raw_chat = os.environ.get("TELEGRAM_CHAT_ID", "0").strip()
+
+          if not all([api_id, api_hash, session]):
+              print("❌ Telegram credentials missing in secrets!")
+              sys.exit(1)
+
+          from pyrogram import Client
+
+          app = Client(
+              "mirror_worker",
+              api_id=int(api_id),
+              api_hash=api_hash,
+              session_string=session,
+              in_memory=True
+          )
+
+          # Optional: Clean old messages from the channel
+          if clean_channel:
+              print("\n" + "=" * 60)
+              print("🧹 CLEANING OLD MESSAGES FROM CHANNEL...")
+              print("=" * 60)
+              try:
+                  with app:
+                      # Resolve chat id
+                      candidates = []
+                      if raw_chat.startswith("-100"): candidates.append(int(raw_chat))
+                      elif raw_chat.lstrip("-").isdigit():
+                          candidates.extend([int(f"-100{raw_chat}"), int(raw_chat), int(f"-{raw_chat}")])
+                      
+                      target_cid = None
+                      for cid in candidates:
+                          try:
+                              chat_info = app.get_chat(cid)
+                              print(f"Connected to chat: {getattr(chat_info, 'title', cid)} (ID: {cid})")
+                              target_cid = cid
+                              break
+                          except Exception as ce:
+                              print(f"Candidate {cid} failed: {ce}")
+
+                      if target_cid:
+                          for start_id in range(1, 201, 100):
+                              del_ids = list(range(start_id, start_id + 100))
+                              try:
+                                  deleted_count = app.delete_messages(target_cid, del_ids)
+                                  print(f"Deleted batch {start_id}-{start_id+99}: {deleted_count} message(s) removed.")
+                              except Exception as de:
+                                  print(f"Delete batch {start_id} note: {de}")
+                      else:
+                          print("⚠️ Could not resolve target chat for cleaning.")
+              except Exception as e:
+                  print(f"⚠️ Message cleanup encountered an issue (continuing with upload): {e}")
+
+          # Determine what to upload
+          if force_all:
+              print("\n🔥 FORCE_ALL requested: Clearing old telegram links and queuing all recordings chronologically (oldest first).")
+              for r in recs:
+                  r["telegram_link"] = ""
+                  r["telegram_file_id"] = ""
+              todo = list(reversed(recs))  # oldest first!
+          else:
+              todo = [r for r in recs if not r.get("telegram_link") and (r.get("archive_direct") or r.get("archive_node") or r.get("archive_link"))]
 
           if not todo:
-              print("✅ All recordings already have Telegram links")
+              print("✅ All recordings already have Telegram links. Nothing to upload.")
               sys.exit(0)
 
-          print(f"Found {len(todo)} recordings to upload\n")
+          print(f"Found {len(todo)} recording(s) to upload to Telegram\n")
 
-          failures = []  # (video_id, title, reason)
+          failures = []
 
-          for attempt in range(1, 4):  # up to 3 passes so transient failures retry
-              still_missing = [r for r in todo if not r.get("telegram_link")]
-              if not still_missing:
-                  break
-              if attempt > 1:
-                  print(f"\n=== RETRY PASS {attempt}: {len(still_missing)} still missing ===")
-              for i, rec in enumerate(still_missing):
-                  title = rec.get("title", "Recording")
-                  vid = rec.get("video_id", "")
-                  url = rec.get("archive_direct") or rec.get("archive_node") or ""
-                  if not url and rec.get("archive_link"):
-                      url = rec["archive_link"].replace("/details/", "/download/") + "/"
+          for i, rec in enumerate(todo):
+              title = rec.get("title", "Recording")
+              vid = rec.get("video_id", "")
+              url = rec.get("archive_direct") or rec.get("archive_node") or ""
+              if not url and rec.get("archive_link"):
+                  url = rec["archive_link"].replace("/details/", "/download/") + "/"
 
-                  print(f"\n{'='*60}")
-                  print(f"[{i+1}/{len(still_missing)}] {title}")
+              print(f"\n{'='*60}")
+              print(f"[{i+1}/{len(todo)}] Uploading: {title} ({vid})")
+              print(f"Source: {url}")
 
-                  safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in title[:60]) + ".mp4"
-                  path = f"/tmp/{safe}"
+              safe = "".join(c if c.isalnum() or c in "._-" else "_" for c in title[:60]) + ".mp4"
+              path = f"/tmp/{safe}"
 
-                  print(f"    Downloading...")
-                  dl = subprocess.run(["curl", "-L", "--retry", "3", "--max-time", "3600", "-o", path, url], capture_output=True)
-                  if dl.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 10000:
-                      print(f"   ❌ Download failed")
-                      failures.append((vid, title, "download failed"))
-                      continue
+              print("  1. Downloading from Archive.org...")
+              dl = subprocess.run(["curl", "-L", "--retry", "3", "--max-time", "3600", "-o", path, url], capture_output=True)
+              if dl.returncode != 0 or not os.path.exists(path) or os.path.getsize(path) < 10000:
+                  print(f"  ❌ Download failed: returncode={dl.returncode}")
+                  failures.append((vid, title, "download failed"))
+                  continue
 
-                  size = os.path.getsize(path)
-                  print(f"    Downloaded: {size/1024/1024:.0f} MB")
+              size = os.path.getsize(path)
+              print(f"  2. Downloaded: {size/1024/1024:.1f} MB. Uploading to Telegram...")
 
-                  # Upload
-                  env = os.environ.copy()
-                  # unique per video so retry passes never clobber each other's
-                  # output file between the upload writing it and us reading it
-                  env["GITHUB_OUTPUT"] = f"/tmp/tg_out_{vid}.txt"
-                  open(env["GITHUB_OUTPUT"], "w").close()
+              env = os.environ.copy()
+              env["GITHUB_OUTPUT"] = f"/tmp/tg_out_{vid}.txt"
+              open(env["GITHUB_OUTPUT"], "w").close()
 
-                  up = subprocess.run(
-                      ["python3", "scripts/telegram/upload_to_telegram.py", path, title],
-                      env=env)
+              up = subprocess.run(
+                  ["python3", "scripts/telegram/upload_to_telegram.py", path, title],
+                  env=env
+              )
 
-                  # Read output, capture BOTH the t.me link AND the Telegram file_id.
-                  # upload_to_telegram.py writes telegram_file_id= specifically so the
-                  # Cloudflare Worker proxy can stream the file (see its "Save file_id
-                  # for Cloudflare Worker proxy" comment).
-                  tg_link = ""
-                  tg_file_id = ""
-                  try:
-                      for line in open(env["GITHUB_OUTPUT"]):
+              tg_link = ""
+              tg_file_id = ""
+              try:
+                  with open(env["GITHUB_OUTPUT"]) as out_f:
+                      for line in out_f:
                           if line.startswith("telegram_link="):
                               tg_link = line.strip().split("=", 1)[1]
                           elif line.startswith("telegram_file_id="):
                               tg_file_id = line.strip().split("=", 1)[1]
-                  except: pass
+              except Exception as oe:
+                  print(f"  Could not read output: {oe}")
 
-                  if tg_link:
-                      import urllib.parse
-                      for r in recs:
-                          if r.get("video_id") == vid:
-                              r["telegram_link"] = tg_link
-                              if tg_file_id:
-                                  r["telegram_file_id"] = tg_file_id
-                              # CF Worker stream URL. The worker (worker.js) was hardened
-                              # to ONLY accept ?file_id=, ?url= and ?bot= were removed
-                              # (open-proxy / token-leak risk) and now return HTTP 400.
-                              # The dashboard's sanitizeCfStream() also strips ?url=/?bot=.
-                              # So the URL MUST be built from the Telegram file_id, NOT the
-                              # archive source. (Previously this used ?url=<src>, which
-                              # produced a dead STORM player source on every recording.)
-                              if tg_file_id:
-                                  r["cf_stream"] = f"https://tg-stream.isthatdxture.workers.dev/?file_id={urllib.parse.quote(tg_file_id, safe='')}"
-                              break
-                      with open("data/recordings.json", "w") as f:
-                          json.dump(recs, f, indent=2)
-                      print(f"   ✅ Link: {tg_link}")
-                  else:
-                      failures.append((vid, title, f"upload returned {up.returncode}"))
-                      print(f"   ❌ Upload failed (rc={up.returncode})")
+              if tg_link:
+                  import urllib.parse
+                  for r in recs:
+                      if r.get("video_id") == vid:
+                          r["telegram_link"] = tg_link
+                          if tg_file_id:
+                              r["telegram_file_id"] = tg_file_id
+                              r["cf_stream"] = f"https://tg-stream.isthatdxture.workers.dev/?file_id={urllib.parse.quote(tg_file_id, safe='')}"
+                          break
+                  with open("data/recordings.json", "w") as f:
+                      json.dump(recs, f, indent=2)
+                  print(f"  ✅ Uploaded successfully! Link: {tg_link}")
+              else:
+                  failures.append((vid, title, f"upload returned {up.returncode}"))
+                  print(f"  ❌ Upload failed (rc={up.returncode})")
 
-                  try: os.remove(path)
-                  except: pass
+              try:
+                  os.remove(path)
+              except Exception:
+                  pass
 
-          print(f"\n{'='*60}\n✅ Done")
+          print(f"\n{'='*60}\nAll done!")
 
-          # Persist failure list for the alert step (deduped by video_id — the
-          # same video can fail on multiple retry passes)
           if failures:
               seen = set()
               uniq = []
@@ -146,18 +208,18 @@ jobs:
               with open("/tmp/tg_failures.txt", "w") as f:
                   for vid, title, reason in uniq:
                       f.write(f"{vid} | {title} | {reason}\n")
-              print(f"⚠️  {len(uniq)} Telegram upload(s) failed after retries")
-              sys.exit(1)  # fail the step so the workflow can alert
+              print(f"⚠️ {len(uniq)} recording(s) failed to upload.")
+              sys.exit(1)
           PYSCRIPT
 
-      - name: Push
+      - name: Commit & push updated links
         if: always()
         run: |
           git config user.name "Stream Recorder Bot"
           git config user.email "bot@stream-recorder"
           git add data/recordings.json
           git diff --cached --quiet || {
-            git commit -m "Telegram: uploaded all recordings"
+            git commit -m "Telegram: uploaded recordings and updated links"
             bash scripts/safe-push.sh
           }
 
@@ -170,18 +232,16 @@ jobs:
         run: |
           if [[ -f /tmp/tg_failures.txt ]]; then
             FAILURES="$(cat /tmp/tg_failures.txt)"
-            echo "##  Telegram upload failures" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
+            echo "## Telegram upload failures" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
             echo "$FAILURES" >> "$GITHUB_STEP_SUMMARY"
-            echo "\`\`\`" >> "$GITHUB_STEP_SUMMARY"
-            MSG="⚠️ **Telegram mirror**: some recordings failed to upload to Telegram after 3 retry passes. These have no Telegram link and may be missing from the bot channel:\n\`\`\`\n$FAILURES\n\`\`\`"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            MSG="⚠️ **Telegram mirror**: some recordings failed to upload to Telegram:\n\`\`\`\n$FAILURES\n\`\`\`"
             WEBHOOK="${DISCORD_WEBHOOK_ALERTS:-${DISCORD_WEBHOOK_URL:-}}"
             if [[ -n "$WEBHOOK" ]]; then
               curl -fsS -X POST "$WEBHOOK" -H "Content-Type: application/json" \
                 -d "$(jq -n --arg m "$MSG" --arg a "${AVATAR_URL:-}" '{content:$m, avatar_url:$a}')" \
                 >/dev/null 2>&1 || echo "discord send failed"
-            else
-              echo "no webhook; would alert: $MSG"
             fi
             exit 1
           else

@@ -39,12 +39,15 @@ def resolve_chat(app):
         candidates.append(int(f"-100{raw}"))
         candidates.append(int(raw))
         candidates.append(int(f"-{raw}"))
+    else:
+        # If it's a username (e.g. @channel or channel)
+        candidates.append(raw if raw.startswith("@") else f"@{raw}")
 
     for cid in candidates:
         try:
             chat = app.get_chat(cid)
-            log("✅", f"Resolved channel: {chat.title} (ID: {cid})")
-            return cid
+            log("✅", f"Resolved channel: {chat.title} (ID: {chat.id})")
+            return chat.id
         except Exception as e:
             log("⚠️", f"ID {cid} failed: {e}")
 
@@ -102,19 +105,30 @@ def main():
         chat_id = resolve_chat(app)
         if not chat_id:
             log("❌", f"Could not resolve channel ID: {CHAT_ID_RAW}")
-            log("", "Make sure the bot/account is a member of the channel")
+            log("", "Make sure the bot/account is an Administrator of the channel")
             sys.exit(1)
 
         caption = f"**{title}**\n{fmt(fsize)}\n☪️ Stream Archive"
         start = time.time()
 
-        msg = app.send_document(
-            chat_id=chat_id,
-            document=path,
-            caption=caption,
-            file_name=os.path.basename(path),
-            progress=progress,
-        )
+        # Attempt to upload as streaming video first, fallback to document
+        try:
+            msg = app.send_video(
+                chat_id=chat_id,
+                video=path,
+                caption=caption,
+                supports_streaming=True,
+                progress=progress,
+            )
+        except Exception as ve:
+            log("⚠️", f"send_video failed ({ve}), falling back to send_document...")
+            msg = app.send_document(
+                chat_id=chat_id,
+                document=path,
+                caption=caption,
+                file_name=os.path.basename(path),
+                progress=progress,
+            )
 
         elapsed = time.time() - start
         speed = fsize / elapsed if elapsed > 0 else 0
@@ -151,7 +165,10 @@ def main():
         traceback.print_exc()
         sys.exit(1)
     finally:
-        app.stop()
+        try:
+            app.stop()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":
