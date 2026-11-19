@@ -457,7 +457,7 @@ publish_chat_to_repo() {
             set_env "RECORD_CHAT_REPO" "data/chat/${vid}.json"
             if [[ -z "${RECORD_CHAT_URL:-}" ]]; then
                 set_env "RECORD_CHAT_URL" \
-                    "https://raw.githubusercontent.com/${GITHUB_REPOSITORY:-usermuneeb1/Stream-Recorder}/main/data/chat/${vid}.json"
+                    "https://raw.githubusercontent.com/${GITHUB_REPOSITORY:-realcringe313-star/Stream-Recorder}/main/data/chat/${vid}.json"
             fi
             return 0
         fi
@@ -660,7 +660,7 @@ upload_to_archive() {
 # Honest browser-shaped UA on EVERY 0807.st call — the PoW fetch already
 # needed it (urllib's default UA was filtered, 2026-09-02); curl's default
 # "curl/8.x" on /upload is the same class of filter target.
-ST0807_UA="${ST0807_UA:-Mozilla/5.0 (X11; Linux x86_64; Stream-Recorder bot; +github.com/usermuneeb1/Stream-Recorder)}"
+ST0807_UA="${ST0807_UA:-Mozilla/5.0 (X11; Linux x86_64; Stream-Recorder bot; +github.com/realcringe313-star/Stream-Recorder)}"
 ST0807_CHUNK_SIZE="${ST0807_CHUNK_SIZE:-16777216}"     # 16 MB, the API maximum
 
 _st0807_auth_args() {

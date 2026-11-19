@@ -24,7 +24,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 RECORDINGS = os.path.join(ROOT, "data", "recordings.json")
 
 TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
-REPO = os.environ.get("REPO", "usermuneeb1/Stream-Recorder").strip()
+REPO = os.environ.get("REPO", "realcringe313-star/Stream-Recorder").strip()
 MAX_ITEMS = int(os.environ.get("GH_MAX_ITEMS", "5"))
 
 API = "https://api.github.com"

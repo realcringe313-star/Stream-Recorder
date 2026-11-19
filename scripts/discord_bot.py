@@ -31,7 +31,7 @@ from datetime import datetime, timezone
 
 # ─── Configuration ────────────────────────────────────────────────────────────
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
-GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "usermuneeb1/Stream-Recorder")
+GITHUB_REPO = os.environ.get("GITHUB_REPOSITORY", "realcringe313-star/Stream-Recorder")
 DISCORD_WEBHOOK_URL = os.environ.get("DISCORD_WEBHOOK_URL", "")
 DASHBOARD_URL = "https://muslim-lantern-archive.vercel.app"
 RECORDINGS_URL = f"https://raw.githubusercontent.com/{GITHUB_REPO}/main/data/recordings.json"

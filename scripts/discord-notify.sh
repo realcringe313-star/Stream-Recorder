@@ -301,7 +301,7 @@ notify_live_detected() {
         --arg timestamp   "$timestamp" \
         --arg bot_ver     "${RECORDER_VERSION:-3.0.0}" \
         --arg bot_name    "${RECORDER_NAME:-The Muslim Lantern}" \
-        --arg repo_url    "https://github.com/${GITHUB_REPOSITORY:-usermuneeb1/Stream-Recorder}" \
+        --arg repo_url    "https://github.com/${GITHUB_REPOSITORY:-realcringe313-star/Stream-Recorder}" \
         '{
             username:   $username,
             avatar_url: $avatar,
@@ -575,7 +575,7 @@ notify_recording_complete() {
         --arg timestamp      "$timestamp" \
         --arg bot_ver        "${RECORDER_VERSION:-3.0.0}" \
         --arg bot_name       "${RECORDER_NAME:-The Muslim Lantern}" \
-        --arg repo_url       "https://github.com/${GITHUB_REPOSITORY:-usermuneeb1/Stream-Recorder}" \
+        --arg repo_url       "https://github.com/${GITHUB_REPOSITORY:-realcringe313-star/Stream-Recorder}" \
         --argjson color      "$color" \
         '{
             username:   $username,

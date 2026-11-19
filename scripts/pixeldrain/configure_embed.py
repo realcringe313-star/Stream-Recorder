@@ -23,7 +23,7 @@ CSV_FILE = os.path.join(SCRIPT_DIR, "accounts.csv")
 API = "https://pixeldrain.com/api"
 ORIGIN = "https://pixeldrain.com"
 
-DEFAULT_DOMAINS = "muslim-lantern-archive.vercel.app usermuneeb1.github.io"
+DEFAULT_DOMAINS = "muslim-lantern-archive.vercel.app realcringe313-star.github.io usermuneeb1.github.io"
 
 
 def auth_header(api_key):

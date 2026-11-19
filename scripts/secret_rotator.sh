@@ -23,7 +23,7 @@
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="${GITHUB_REPOSITORY:-usermuneeb1/Stream-Recorder}"
+REPO="${GITHUB_REPOSITORY:-realcringe313-star/Stream-Recorder}"
 DISCORD_WEBHOOK="${DISCORD_WEBHOOK_REPORTS:-${DISCORD_WEBHOOK_URL:-}}"
 
 log() { echo "  Rotator: $*"; }

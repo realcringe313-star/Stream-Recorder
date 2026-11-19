@@ -18,7 +18,7 @@ POW_URL = "https://0807.st/pow"
 # send an honest, browser-shaped one (2026-09-02: anonymous PoW fetch failed
 # instantly on every repair run).
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; Stream-Recorder bot; +github.com/usermuneeb1/Stream-Recorder)",
+    "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; Stream-Recorder bot; +github.com/realcringe313-star/Stream-Recorder)",
     "Accept": "application/json",
 }
 

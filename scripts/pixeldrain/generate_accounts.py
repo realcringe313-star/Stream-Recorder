@@ -140,7 +140,7 @@ def enable_embedding(session, api_key):
     embedded without the hotlink 403. Returns True on success."""
     domains = os.environ.get(
         "PIXELDRAIN_EMBED_DOMAINS",
-        "muslim-lantern-archive.vercel.app usermuneeb1.github.io",
+        "muslim-lantern-archive.vercel.app realcringe313-star.github.io usermuneeb1.github.io",
     ).strip()
     clean = " ".join(d for d in domains.split() if "." in d)
     token = (
