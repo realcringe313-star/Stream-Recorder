@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pyrogram tgcrypto
-      - name: Test Invite Link Resolution
+      - name: Test Pyrogram with Patched Channel ID
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -20,51 +20,56 @@ jobs:
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
         run: |
           python3 << 'EOF'
-          import urllib.request, json, os
+          import os, sys, tempfile
+          import pyrogram.utils
+
+          # 1. Apply patch for 64-bit Telegram Channel IDs (> 2^31)
+          print("Default MIN_CHANNEL_ID:", pyrogram.utils.MIN_CHANNEL_ID)
+          pyrogram.utils.MIN_CHANNEL_ID = -10099999999999
+          print("Patched MIN_CHANNEL_ID:", pyrogram.utils.MIN_CHANNEL_ID)
+
           from pyrogram import Client, raw
 
-          TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-          CID = "-1004304551882"
+          API_ID = int(os.environ["TELEGRAM_API_ID"])
+          API_HASH = os.environ["TELEGRAM_API_HASH"]
+          SESSION = os.environ["TELEGRAM_SESSION_STRING"]
+          CID = -1004304551882
 
-          # 1. Get or create invite link via HTTP API
-          invite_link = None
-          try:
-              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/exportChatInviteLink?chat_id={CID}")
-              with urllib.request.urlopen(req) as resp:
-                  res = json.loads(resp.read().decode())
-                  invite_link = res.get("result")
-                  print(f"✅ Generated invite link: {invite_link}")
-          except Exception as e:
-              print(f"Invite link generation failed: {e}")
+          print(f"Testing peer_type: {pyrogram.utils.get_peer_type(CID)}")
+          print(f"Testing channel_id: {pyrogram.utils.get_channel_id(CID)}")
 
-          # 2. Test in Pyrogram
           app = Client(
               "diag_client",
-              api_id=int(os.environ["TELEGRAM_API_ID"]),
-              api_hash=os.environ["TELEGRAM_API_HASH"],
-              session_string=os.environ["TELEGRAM_SESSION_STRING"],
+              api_id=API_ID,
+              api_hash=API_HASH,
+              session_string=SESSION,
               in_memory=True
           )
 
           with app:
-              if invite_link:
-                  print("Testing app.get_chat(invite_link)...")
-                  try:
-                      chat = app.get_chat(invite_link)
-                      print(f"✅ Successfully resolved via invite link: {chat.title} (ID: {chat.id})")
-                      
-                      # Now test sending a test document
-                      import tempfile
-                      with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
-                          tf.write(b"Test upload payload from Stream-Recorder")
-                          tf_path = tf.name
-                      
-                      doc = app.send_document(chat.id, tf_path, caption="Test upload verification")
-                      print(f"🎉 MTPROTO UPLOAD SUCCESS! Message ID: {doc.id}")
-                      os.remove(tf_path)
-                  except Exception as e:
-                      print(f"❌ Invite link resolution failed: {e}")
-              else:
-                  print("No invite link available.")
+              print("\n--- Test 1: app.get_chat(-1004304551882) ---")
+              try:
+                  chat = app.get_chat(CID)
+                  print(f"✅ get_chat SUCCEEDED: Title='{chat.title}', ID={chat.id}")
+              except Exception as e:
+                  print(f"❌ get_chat failed: {type(e).__name__}: {e}")
+
+              print("\n--- Test 2: Send test message via MTProto ---")
+              try:
+                  msg = app.send_message(CID, "Test message from Pyrogram MTProto with patched MIN_CHANNEL_ID")
+                  print(f"✅ send_message SUCCEEDED: Message ID={msg.id}")
+              except Exception as e:
+                  print(f"❌ send_message failed: {type(e).__name__}: {e}")
+
+              print("\n--- Test 3: Upload test document via MTProto ---")
+              try:
+                  with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+                      tf.write(b"Test upload payload from Stream-Recorder diagnostics")
+                      tf_path = tf.name
+                  doc = app.send_document(CID, tf_path, caption="Verification test upload")
+                  print(f"🎉 MTPROTO UPLOAD SUCCESS! Document Message ID={doc.id}")
+                  os.remove(tf_path)
+              except Exception as e:
+                  print(f"❌ send_document failed: {type(e).__name__}: {e}")
 
           EOF
