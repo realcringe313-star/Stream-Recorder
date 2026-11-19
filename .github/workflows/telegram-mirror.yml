@@ -45,11 +45,15 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
-          FORCE_ALL: ${{ github.event.inputs.force_all || 'false' }}
-          CLEAN_CHANNEL: ${{ github.event.inputs.clean_channel || 'false' }}
+          FORCE_ALL: ${{ inputs.force_all || github.event.inputs.force_all || 'false' }}
+          CLEAN_CHANNEL: ${{ inputs.clean_channel || github.event.inputs.clean_channel || 'false' }}
         run: |
           python3 << 'PYSCRIPT'
           import json, os, subprocess, sys
+
+          # Patch Pyrogram 32-bit channel ID limit for modern Telegram 64-bit IDs
+          import pyrogram.utils
+          pyrogram.utils.MIN_CHANNEL_ID = -100999999999999
 
           with open("data/recordings.json") as f:
               recs = json.load(f)
@@ -100,13 +104,17 @@ jobs:
                               print(f"Candidate {cid} failed: {ce}")
 
                       if target_cid:
-                          for start_id in range(1, 201, 100):
+                          total_deleted = 0
+                          for start_id in range(1, 1000, 100):
                               del_ids = list(range(start_id, start_id + 100))
                               try:
                                   deleted_count = app.delete_messages(target_cid, del_ids)
-                                  print(f"Deleted batch {start_id}-{start_id+99}: {deleted_count} message(s) removed.")
+                                  if deleted_count:
+                                      total_deleted += deleted_count
+                                      print(f"Deleted batch {start_id}-{start_id+99}: {deleted_count} message(s) removed.")
                               except Exception as de:
                                   print(f"Delete batch {start_id} note: {de}")
+                          print(f"Total old messages deleted: {total_deleted}")
                       else:
                           print("⚠️ Could not resolve target chat for cleaning.")
               except Exception as e:

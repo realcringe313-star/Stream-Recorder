@@ -5,6 +5,14 @@ import os
 import sys
 import time
 
+# Patch Pyrogram's hardcoded 32-bit channel ID limit (-1002147483647)
+# to support modern Telegram 64-bit channel IDs (> 2^31)
+try:
+    import pyrogram.utils
+    pyrogram.utils.MIN_CHANNEL_ID = -100999999999999
+except ImportError:
+    pass
+
 API_ID = os.environ.get("TELEGRAM_API_ID", "")
 API_HASH = os.environ.get("TELEGRAM_API_HASH", "")
 SESSION = os.environ.get("TELEGRAM_SESSION_STRING", "")
@@ -51,20 +59,22 @@ def resolve_chat(app):
         except Exception as e:
             log("⚠️", f"ID {cid} failed: {e}")
 
-    # Last resort: try to find it by listing dialogs
-    log("", "Searching dialogs for the channel...")
-    try:
-        for dialog in app.get_dialogs():
-            chat = dialog.chat
-            chat_id_str = str(chat.id).replace("-100", "")
-            if chat_id_str == raw or str(chat.id) == raw:
-                log("✅", f"Found via dialogs: {chat.title} (ID: {chat.id})")
-                return chat.id
-            if hasattr(chat, 'title') and chat.title and "archive" in chat.title.lower():
-                log("✅", f"Found by name: {chat.title} (ID: {chat.id})")
-                return chat.id
-    except Exception as e:
-        log("⚠️", f"Dialog search failed: {e}")
+    # Last resort: try to find it by listing dialogs (user accounts only)
+    is_bot = getattr(getattr(app, "me", None), "is_bot", False)
+    if not is_bot:
+        log("", "Searching dialogs for the channel...")
+        try:
+            for dialog in app.get_dialogs():
+                chat = dialog.chat
+                chat_id_str = str(chat.id).replace("-100", "")
+                if chat_id_str == raw or str(chat.id) == raw:
+                    log("✅", f"Found via dialogs: {chat.title} (ID: {chat.id})")
+                    return chat.id
+                if hasattr(chat, 'title') and chat.title and "archive" in chat.title.lower():
+                    log("✅", f"Found by name: {chat.title} (ID: {chat.id})")
+                    return chat.id
+        except Exception as e:
+            log("⚠️", f"Dialog search failed: {e}")
 
     return None
 

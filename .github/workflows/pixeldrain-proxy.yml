@@ -1,0 +1,189 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  🔄 PIXELDRAIN PROXY CONVERTER                                             ║
+# ║  Converts pixeldrain.com URLs → proxy domain for direct video streaming.   ║
+# ║  The proxy bypasses Pixeldrain's download wall, enabling native HTML5       ║
+# ║  <video> playback in the dashboard — no iframe needed.                      ║
+# ║                                                                             ║
+# ║  Targets: data/recordings.json, links.txt, data/source-health.json         ║
+# ║  Safe:    Never touches code files (.ts, .tsx, .sh, .yml)                   ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+name: "🔄 Pixeldrain Proxy Converter"
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Preview changes without committing"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "false"
+          - "true"
+      proxy_domain:
+        description: "Proxy domain to use (default: pixeldrain-bypass.gamedrive.org)"
+        required: false
+        default: "pixeldrain-bypass.gamedrive.org"
+        type: string
+
+  # Run after cloud uploads complete (new recordings)
+  workflow_run:
+    workflows:
+      - "📡 Stream Recorder"
+      - "☁️ Archive to MEGA/Pixeldrain/Gofile"
+    types:
+      - completed
+
+  # Daily check — catch any new pixeldrain.com links
+  schedule:
+    - cron: "30 3 * * *"   # 3:30 AM UTC daily
+
+permissions:
+  contents: write
+
+jobs:
+  convert-proxy:
+    name: "🔄 Convert Pixeldrain URLs"
+    runs-on: ubuntu-latest
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+
+    steps:
+      - name: "📥 Checkout Repository"
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_PAT || secrets.GITHUB_TOKEN }}
+          fetch-depth: 1
+
+      - name: "🔍 Detect & Convert Pixeldrain Links"
+        id: convert
+        run: |
+          set -euo pipefail
+
+          PROXY_DOMAIN="${{ inputs.proxy_domain || 'pixeldrain-bypass.gamedrive.org' }}"
+          DRY_RUN="${{ inputs.dry_run || 'false' }}"
+          ORIGINAL_DOMAIN="pixeldrain.com"
+
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🔄 Pixeldrain Proxy Converter"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "  Original domain : ${ORIGINAL_DOMAIN}"
+          echo "  Proxy domain    : ${PROXY_DOMAIN}"
+          echo "  Dry run         : ${DRY_RUN}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # ── Target data files only (NEVER touch code) ──
+          DATA_FILES=(
+            "data/recordings.json"
+            "data/source-health.json"
+            "links.txt"
+          )
+
+          TOTAL_REPLACEMENTS=0
+          MODIFIED_FILES=()
+
+          for file in "${DATA_FILES[@]}"; do
+            if [[ ! -f "$file" ]]; then
+              echo "  ⏭️  ${file} — not found, skipping"
+              continue
+            fi
+
+            # Count occurrences of the original domain (exclude already-proxied URLs)
+            COUNT=$(grep -c "${ORIGINAL_DOMAIN}" "$file" 2>/dev/null || echo "0")
+
+            # Subtract any that are already the proxy domain
+            PROXY_COUNT=$(grep -c "${PROXY_DOMAIN}" "$file" 2>/dev/null || echo "0")
+            REAL_COUNT=$(( COUNT - PROXY_COUNT ))
+
+            if (( REAL_COUNT <= 0 )); then
+              echo "  ✅ ${file} — no unconverted links found"
+              continue
+            fi
+
+            echo "  🔄 ${file} — ${REAL_COUNT} link(s) to convert"
+
+            if [[ "$DRY_RUN" == "true" ]]; then
+              echo "     [DRY RUN] Would replace ${REAL_COUNT} occurrence(s)"
+              grep -n "${ORIGINAL_DOMAIN}" "$file" | grep -v "${PROXY_DOMAIN}" | head -10 || true
+            else
+              # Replace pixeldrain.com with proxy, but NOT if already proxied
+              # Use a negative lookbehind approach: replace only bare pixeldrain.com
+              # Strategy: first replace proxy back to original, then replace all original to proxy
+              # This is idempotent — safe to run multiple times
+              sed -i "s|${PROXY_DOMAIN}|${ORIGINAL_DOMAIN}|g" "$file"
+              sed -i "s|${ORIGINAL_DOMAIN}|${PROXY_DOMAIN}|g" "$file"
+
+              MODIFIED_FILES+=("$file")
+            fi
+
+            TOTAL_REPLACEMENTS=$(( TOTAL_REPLACEMENTS + REAL_COUNT ))
+          done
+
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📊 Summary: ${TOTAL_REPLACEMENTS} link(s) converted across ${#MODIFIED_FILES[@]} file(s)"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Export for commit step
+          echo "total_replacements=${TOTAL_REPLACEMENTS}" >> "$GITHUB_OUTPUT"
+          echo "modified_count=${#MODIFIED_FILES[@]}" >> "$GITHUB_OUTPUT"
+          echo "dry_run=${DRY_RUN}" >> "$GITHUB_OUTPUT"
+
+      - name: "✅ Validate JSON Integrity"
+        if: steps.convert.outputs.modified_count != '0' && steps.convert.outputs.dry_run == 'false'
+        run: |
+          echo "🔍 Validating JSON files after replacement..."
+
+          VALID=true
+
+          if [[ -f "data/recordings.json" ]]; then
+            if python3 -m json.tool data/recordings.json > /dev/null 2>&1; then
+              echo "  ✅ data/recordings.json — valid JSON"
+            else
+              echo "  ❌ data/recordings.json — INVALID JSON! Rolling back..."
+              git checkout -- data/recordings.json
+              VALID=false
+            fi
+          fi
+
+          if [[ -f "data/source-health.json" ]]; then
+            if python3 -m json.tool data/source-health.json > /dev/null 2>&1; then
+              echo "  ✅ data/source-health.json — valid JSON"
+            else
+              echo "  ❌ data/source-health.json — INVALID JSON! Rolling back..."
+              git checkout -- data/source-health.json
+              VALID=false
+            fi
+          fi
+
+          if [[ "$VALID" == "false" ]]; then
+            echo "::warning::Some JSON files were invalid after replacement and were rolled back"
+          fi
+
+      - name: "📤 Commit & Push Changes"
+        if: steps.convert.outputs.total_replacements != '0' && steps.convert.outputs.dry_run == 'false'
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [[ -n "$(git status --porcelain)" ]]; then
+            git add data/recordings.json data/source-health.json links.txt 2>/dev/null || true
+            git commit -m "🔄 auto: Convert ${{ steps.convert.outputs.total_replacements }} Pixeldrain link(s) to streaming proxy
+
+Converted pixeldrain.com → ${{ inputs.proxy_domain || 'pixeldrain-bypass.gamedrive.org' }}
+Files modified: ${{ steps.convert.outputs.modified_count }}
+Trigger: ${{ github.event_name }}"
+            git push
+            echo "✅ Changes committed and pushed"
+          else
+            echo "ℹ️  No changes to commit (files already up to date)"
+          fi
+
+      - name: "📊 Report (No Changes)"
+        if: steps.convert.outputs.total_replacements == '0'
+        run: |
+          echo "✅ All Pixeldrain links are already using the proxy domain."
+          echo "   No changes needed."
