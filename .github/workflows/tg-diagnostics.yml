@@ -1,0 +1,89 @@
+name: Telegram Diagnostics
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install pyrogram tgcrypto
+      - name: Inspect Bot and Channel Access
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          TELEGRAM_SESSION_STRING: ${{ secrets.TELEGRAM_SESSION_STRING }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          python3 << 'EOF'
+          import urllib.request, json, os
+
+          TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+          RAW_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+
+          print(f"Configured RAW_CHAT in secrets: '{RAW_CHAT}'")
+
+          # 1. Check Bot via HTTP API
+          try:
+              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getMe")
+              with urllib.request.urlopen(req) as resp:
+                  me = json.loads(resp.read().decode())
+                  print(f"Bot info: @{me['result']['username']} (ID: {me['result']['id']})")
+          except Exception as e:
+              print(f"getMe failed: {e}")
+
+          # 2. Check getUpdates to see recent chats / channel invitations
+          print("\n--- Checking getUpdates ---")
+          try:
+              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getUpdates")
+              with urllib.request.urlopen(req) as resp:
+                  updates = json.loads(resp.read().decode())
+                  results = updates.get("result", [])
+                  print(f"Total recent updates: {len(results)}")
+                  found_chats = {}
+                  for u in results:
+                      chat = None
+                      if "my_chat_member" in u:
+                          chat = u["my_chat_member"]["chat"]
+                      elif "message" in u and "chat" in u["message"]:
+                          chat = u["message"]["chat"]
+                      elif "channel_post" in u and "chat" in u["channel_post"]:
+                          chat = u["channel_post"]["chat"]
+                      if chat:
+                          found_chats[chat["id"]] = chat
+                  
+                  if found_chats:
+                      print("Found the following chats/channels the bot interacted with:")
+                      for cid, c in found_chats.items():
+                          print(f"  -> Title: '{c.get('title', c.get('username'))}', ID: {cid}, Type: {c.get('type')}, Username: @{c.get('username')}")
+                  else:
+                      print("No recent chat interactions found in getUpdates.")
+          except Exception as e:
+              print(f"getUpdates failed: {e}")
+
+          # 3. Test getChat for candidate IDs
+          print("\n--- Testing getChat on candidate IDs ---")
+          candidates = [RAW_CHAT]
+          if not RAW_CHAT.startswith("-100") and RAW_CHAT.lstrip("-").isdigit():
+              candidates.append(f"-100{RAW_CHAT}")
+          if RAW_CHAT.startswith("-100"):
+              candidates.append(RAW_CHAT.replace("-100", ""))
+
+          for cid in candidates:
+              try:
+                  url = f"https://api.telegram.org/bot{TOKEN}/getChat?chat_id={cid}"
+                  req = urllib.request.Request(url)
+                  with urllib.request.urlopen(req) as resp:
+                      res = json.loads(resp.read().decode())
+                      print(f"✅ ID {cid} is VALID! Title: {res['result'].get('title')}, Username: @{res['result'].get('username')}, Type: {res['result'].get('type')}")
+              except urllib.error.HTTPError as he:
+                  err = he.read().decode()
+                  print(f"❌ ID {cid} returned HTTP {he.code}: {err}")
+              except Exception as e:
+                  print(f"❌ ID {cid} error: {e}")
+
+          EOF
