@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pyrogram tgcrypto
-      - name: Inspect Bot and Channel Access
+      - name: Test Bot Channel Access
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -23,67 +23,50 @@ jobs:
           import urllib.request, json, os
 
           TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
-          RAW_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "").strip()
+          CID = "-1004304551882"
 
-          print(f"Configured RAW_CHAT in secrets: '{RAW_CHAT}'")
-
-          # 1. Check Bot via HTTP API
+          # 1. Send test message via HTTP Bot API
+          print(f"Testing HTTP sendMessage to {CID}...")
           try:
-              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getMe")
+              data = json.dumps({"chat_id": CID, "text": "🤖 Bot connected successfully! Testing upload access..."}).encode("utf-8")
+              req = urllib.request.Request(
+                  f"https://api.telegram.org/bot{TOKEN}/sendMessage",
+                  data=data,
+                  headers={"Content-Type": "application/json"}
+              )
               with urllib.request.urlopen(req) as resp:
-                  me = json.loads(resp.read().decode())
-                  print(f"Bot info: @{me['result']['username']} (ID: {me['result']['id']})")
-          except Exception as e:
-              print(f"getMe failed: {e}")
+                  res = json.loads(resp.read().decode())
+                  print("✅ HTTP sendMessage SUCCESS:", res["ok"], "Message ID:", res["result"]["message_id"])
+          except urllib.error.HTTPError as e:
+              print(f"❌ HTTP sendMessage failed: HTTP {e.code} {e.read().decode()}")
 
-          # 2. Check getUpdates to see recent chats / channel invitations
-          print("\n--- Checking getUpdates ---")
-          try:
-              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/getUpdates")
-              with urllib.request.urlopen(req) as resp:
-                  updates = json.loads(resp.read().decode())
-                  results = updates.get("result", [])
-                  print(f"Total recent updates: {len(results)}")
-                  found_chats = {}
-                  for u in results:
-                      chat = None
-                      if "my_chat_member" in u:
-                          chat = u["my_chat_member"]["chat"]
-                      elif "message" in u and "chat" in u["message"]:
-                          chat = u["message"]["chat"]
-                      elif "channel_post" in u and "chat" in u["channel_post"]:
-                          chat = u["channel_post"]["chat"]
-                      if chat:
-                          found_chats[chat["id"]] = chat
-                  
-                  if found_chats:
-                      print("Found the following chats/channels the bot interacted with:")
-                      for cid, c in found_chats.items():
-                          print(f"  -> Title: '{c.get('title', c.get('username'))}', ID: {cid}, Type: {c.get('type')}, Username: @{c.get('username')}")
-                  else:
-                      print("No recent chat interactions found in getUpdates.")
-          except Exception as e:
-              print(f"getUpdates failed: {e}")
+          # 2. Test Pyrogram MTProto resolving
+          from pyrogram import Client, raw
 
-          # 3. Test getChat for candidate IDs
-          print("\n--- Testing getChat on candidate IDs ---")
-          candidates = [RAW_CHAT]
-          if not RAW_CHAT.startswith("-100") and RAW_CHAT.lstrip("-").isdigit():
-              candidates.append(f"-100{RAW_CHAT}")
-          if RAW_CHAT.startswith("-100"):
-              candidates.append(RAW_CHAT.replace("-100", ""))
+          app = Client(
+              "diag_client",
+              api_id=int(os.environ["TELEGRAM_API_ID"]),
+              api_hash=os.environ["TELEGRAM_API_HASH"],
+              session_string=os.environ["TELEGRAM_SESSION_STRING"],
+              in_memory=True
+          )
 
-          for cid in candidates:
+          with app:
+              print("\nPyrogram connected. Checking MTProto access...")
+              # Call updates.GetDifference to load all recent channel updates & access hashes into Pyrogram's memory!
               try:
-                  url = f"https://api.telegram.org/bot{TOKEN}/getChat?chat_id={cid}"
-                  req = urllib.request.Request(url)
-                  with urllib.request.urlopen(req) as resp:
-                      res = json.loads(resp.read().decode())
-                      print(f"✅ ID {cid} is VALID! Title: {res['result'].get('title')}, Username: @{res['result'].get('username')}, Type: {res['result'].get('type')}")
-              except urllib.error.HTTPError as he:
-                  err = he.read().decode()
-                  print(f"❌ ID {cid} returned HTTP {he.code}: {err}")
-              except Exception as e:
-                  print(f"❌ ID {cid} error: {e}")
+                  diff = app.invoke(raw.functions.updates.GetDifference(pts=1, date=0, qts=0))
+                  print("✅ updates.GetDifference loaded! Found chats in update:", len(getattr(diff, "chats", [])))
+                  for c in getattr(diff, "chats", []):
+                      print(f"   Chat in MTProto diff: {c.title} (ID: {c.id}, AccessHash: {getattr(c, 'access_hash', None)})")
+              except Exception as de:
+                  print(f"GetDifference note: {de}")
+
+              # Now try get_chat
+              try:
+                  chat = app.get_chat(int(CID))
+                  print(f"✅ Pyrogram get_chat SUCCESS! Title: {chat.title} (ID: {chat.id})")
+              except Exception as pe:
+                  print(f"❌ Pyrogram get_chat failed: {pe}")
 
           EOF
