@@ -11,7 +11,7 @@ jobs:
         with:
           python-version: "3.11"
       - run: pip install pyrogram tgcrypto
-      - name: Test Bot Channel Access
+      - name: Test Invite Link Resolution
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
@@ -21,28 +21,23 @@ jobs:
         run: |
           python3 << 'EOF'
           import urllib.request, json, os
+          from pyrogram import Client, raw
 
           TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
           CID = "-1004304551882"
 
-          # 1. Send test message via HTTP Bot API
-          print(f"Testing HTTP sendMessage to {CID}...")
+          # 1. Get or create invite link via HTTP API
+          invite_link = None
           try:
-              data = json.dumps({"chat_id": CID, "text": "🤖 Bot connected successfully! Testing upload access..."}).encode("utf-8")
-              req = urllib.request.Request(
-                  f"https://api.telegram.org/bot{TOKEN}/sendMessage",
-                  data=data,
-                  headers={"Content-Type": "application/json"}
-              )
+              req = urllib.request.Request(f"https://api.telegram.org/bot{TOKEN}/exportChatInviteLink?chat_id={CID}")
               with urllib.request.urlopen(req) as resp:
                   res = json.loads(resp.read().decode())
-                  print("✅ HTTP sendMessage SUCCESS:", res["ok"], "Message ID:", res["result"]["message_id"])
-          except urllib.error.HTTPError as e:
-              print(f"❌ HTTP sendMessage failed: HTTP {e.code} {e.read().decode()}")
+                  invite_link = res.get("result")
+                  print(f"✅ Generated invite link: {invite_link}")
+          except Exception as e:
+              print(f"Invite link generation failed: {e}")
 
-          # 2. Test Pyrogram MTProto resolving
-          from pyrogram import Client, raw
-
+          # 2. Test in Pyrogram
           app = Client(
               "diag_client",
               api_id=int(os.environ["TELEGRAM_API_ID"]),
@@ -52,21 +47,24 @@ jobs:
           )
 
           with app:
-              print("\nPyrogram connected. Checking MTProto access...")
-              # Call updates.GetDifference to load all recent channel updates & access hashes into Pyrogram's memory!
-              try:
-                  diff = app.invoke(raw.functions.updates.GetDifference(pts=1, date=0, qts=0))
-                  print("✅ updates.GetDifference loaded! Found chats in update:", len(getattr(diff, "chats", [])))
-                  for c in getattr(diff, "chats", []):
-                      print(f"   Chat in MTProto diff: {c.title} (ID: {c.id}, AccessHash: {getattr(c, 'access_hash', None)})")
-              except Exception as de:
-                  print(f"GetDifference note: {de}")
-
-              # Now try get_chat
-              try:
-                  chat = app.get_chat(int(CID))
-                  print(f"✅ Pyrogram get_chat SUCCESS! Title: {chat.title} (ID: {chat.id})")
-              except Exception as pe:
-                  print(f"❌ Pyrogram get_chat failed: {pe}")
+              if invite_link:
+                  print("Testing app.get_chat(invite_link)...")
+                  try:
+                      chat = app.get_chat(invite_link)
+                      print(f"✅ Successfully resolved via invite link: {chat.title} (ID: {chat.id})")
+                      
+                      # Now test sending a test document
+                      import tempfile
+                      with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tf:
+                          tf.write(b"Test upload payload from Stream-Recorder")
+                          tf_path = tf.name
+                      
+                      doc = app.send_document(chat.id, tf_path, caption="Test upload verification")
+                      print(f"🎉 MTPROTO UPLOAD SUCCESS! Message ID: {doc.id}")
+                      os.remove(tf_path)
+                  except Exception as e:
+                      print(f"❌ Invite link resolution failed: {e}")
+              else:
+                  print("No invite link available.")
 
           EOF
