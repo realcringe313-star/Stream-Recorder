@@ -11,19 +11,15 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "dashboard/**"
       - "scripts/**"
       - "tests/**"
       - ".github/workflows/**"
-      - "package*.json"
   push:
     branches: [main]
     paths:
-      - "dashboard/**"
       - "scripts/**"
       - "tests/**"
       - ".github/workflows/**"
-      - "package*.json"
 
 permissions:
   contents: read
@@ -107,39 +103,3 @@ jobs:
           grep -RohE '\$\{\{[[:space:]]*secrets\.[A-Za-z0-9_]+[[:space:]]*\}\}' .github/workflows scripts 2>/dev/null \
             | sed -E 's/.*secrets\.([A-Za-z0-9_]+).*/- `\1`/' \
             | sort -u >> "$GITHUB_STEP_SUMMARY" || true
-
-  dashboard:
-    name: "Dashboard lint + build"
-    runs-on: ubuntu-24.04
-    timeout-minutes: 10
-    defaults:
-      run:
-        shell: bash
-        working-directory: dashboard
-    steps:
-      - name: "Checkout"
-        uses: actions/checkout@v7
-
-      - name: "Setup Node.js"
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: dashboard/package-lock.json
-
-      - name: "Install dependencies"
-        run: npm ci
-
-      - name: "Lint"
-        run: npm run lint
-
-      - name: "Unit tests"
-        run: npm test
-
-      - name: "Dependency audit"
-        # Critical-only so known-transitive noise can't permanently redden
-        # the gate; high/critical in direct deps still surfaces here.
-        run: npm audit --audit-level=critical
-
-      - name: "Build"
-        run: npm run build

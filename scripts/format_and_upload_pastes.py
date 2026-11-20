@@ -1,0 +1,146 @@
+import json
+import os
+import sys
+import urllib.request
+import urllib.parse
+import http.cookiejar
+
+def generate_catalog():
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    rec_path = os.path.join(repo_dir, "data", "recordings.json")
+    
+    with open(rec_path, "r", encoding="utf-8") as f:
+        recs = json.load(f)
+        
+    md_lines = []
+    txt_lines = []
+    
+    md_lines.append("# The Muslim Lantern — Live Stream Archive Index")
+    md_lines.append(f"**Total Recordings:** {len(recs)}  ")
+    md_lines.append(f"**Archive Status:** Multi-Cloud Mirror Network (Telegram, Archive.org, Pixeldrain, Mega, DropDrive, YouTube Unlisted)  \n")
+    md_lines.append("---\n")
+    
+    for i, r in enumerate(recs, 1):
+        title = r.get("title", "Recording")
+        date = r.get("date", "")
+        dur = r.get("duration_fmt") or f"{r.get('duration_sec', 0)//60}m"
+        size = r.get("size_human", "")
+        res = r.get("resolution", "")
+        vid_id = r.get("video_id", "")
+        
+        md_lines.append(f"### {i}. {title}")
+        md_lines.append(f"- **Date:** `{date}` | **Duration:** `{dur}` | **Size:** `{size}` | **Resolution:** `{res}`")
+        md_lines.append(f"- **Original YouTube:** https://www.youtube.com/watch?v={vid_id}")
+        if r.get("youtube_unlisted"):
+            md_lines.append(f"- **Unlisted YouTube Mirror:** {r.get('youtube_unlisted')}")
+        if r.get("telegram_link"):
+            md_lines.append(f"- **Telegram Direct Stream:** {r.get('telegram_link')}")
+        if r.get("archive_direct"):
+            md_lines.append(f"- **Archive.org Direct MP4:** {r.get('archive_direct')}")
+        if r.get("archive_node"):
+            md_lines.append(f"- **Archive.org CDN Node:** {r.get('archive_node')}")
+        if r.get("archive_link"):
+            md_lines.append(f"- **Archive.org Details:** {r.get('archive_link')}")
+        if r.get("pixeldrain_link"):
+            md_lines.append(f"- **Pixeldrain CDN:** {r.get('pixeldrain_link')}")
+        if r.get("mega_link"):
+            md_lines.append(f"- **Mega Storage:** {r.get('mega_link')}")
+        if r.get("st0807_link"):
+            name = "DropDrive CDN" if "dropdrive" in r.get("st0807_link") else "0807 CDN"
+            md_lines.append(f"- **{name}:** {r.get('st0807_link')}")
+        if r.get("gofile_link"):
+            md_lines.append(f"- **Gofile:** {r.get('gofile_link')}")
+        md_lines.append("\n---\n")
+
+    return "\n".join(md_lines)
+
+def upload_to_rentry(text, edit_code="tml-archive-2026"):
+    cj = http.cookiejar.CookieJar()
+    opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
+    req = urllib.request.Request("https://rentry.co", headers={"User-Agent": "Mozilla/5.0"})
+    opener.open(req)
+    
+    csrf = ""
+    for cookie in cj:
+        if cookie.name == "csrftoken":
+            csrf = cookie.value
+            break
+            
+    data = urllib.parse.urlencode({
+        "csrfmiddlewaretoken": csrf,
+        "text": text,
+        "edit_code": edit_code
+    }).encode("utf-8")
+    
+    post_req = urllib.request.Request(
+        "https://rentry.co/api/new",
+        data=data,
+        headers={
+            "User-Agent": "Mozilla/5.0",
+            "Referer": "https://rentry.co",
+            "Origin": "https://rentry.co"
+        }
+    )
+    
+    resp = opener.open(post_req)
+    res_json = json.loads(resp.read().decode("utf-8"))
+    return res_json
+
+def upload_to_dpaste(text):
+    data = urllib.parse.urlencode({
+        "content": text,
+        "title": "The Muslim Lantern Live Stream Archive Index",
+        "syntax": "markdown",
+        "expiry_days": 365,
+        "format": "url"
+    }).encode("utf-8")
+    req = urllib.request.Request("https://dpaste.org/api/", data=data, headers={"User-Agent": "curl/7.68.0"})
+    with urllib.request.urlopen(req) as resp:
+        return resp.read().decode("utf-8").strip().strip('"')
+
+def upload_to_pastebin(api_dev_key, text, paste_name="The Muslim Lantern Archive Index"):
+    data = urllib.parse.urlencode({
+        "api_dev_key": api_dev_key,
+        "api_option": "paste",
+        "api_paste_code": text,
+        "api_paste_name": paste_name,
+        "api_paste_private": "1", # 1 = Unlisted
+        "api_paste_expire_date": "N", # Never
+        "api_paste_format": "text"
+    }).encode("utf-8")
+    req = urllib.request.Request("https://pastebin.com/api/api_post.php", data=data, headers={"User-Agent": "Mozilla/5.0"})
+    with urllib.request.urlopen(req) as resp:
+        return resp.read().decode("utf-8").strip()
+
+if __name__ == "__main__":
+    content = generate_catalog()
+    print(f"Generated catalog: {len(content)} characters.")
+    
+    # 1. Rentry
+    try:
+        r = upload_to_rentry(content)
+        print("✅ Rentry.co URL:", r.get("url"))
+        print("   Edit code:", r.get("edit_code"))
+    except Exception as e:
+        print("❌ Rentry error:", e)
+        
+    # 2. dpaste.org
+    try:
+        dp = upload_to_dpaste(content)
+        print("✅ dpaste.org URL:", dp)
+    except Exception as e:
+        print("❌ dpaste error:", e)
+
+    # 3. Pastebin (if key provided via env or arg)
+    pb_key = os.environ.get("PASTEBIN_API_KEY", "")
+    if len(sys.argv) > 1:
+        pb_key = sys.argv[1]
+        
+    if pb_key:
+        try:
+            pb = upload_to_pastebin(pb_key, content)
+            print("✅ Pastebin.com URL:", pb)
+        except Exception as e:
+            print("❌ Pastebin error:", e)
+    else:
+        print("ℹ️ Pastebin: No PASTEBIN_API_KEY provided yet. Run with `python scripts/format_and_upload_pastes.py <YOUR_API_KEY>`")

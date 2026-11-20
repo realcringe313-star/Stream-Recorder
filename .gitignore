@@ -66,3 +66,8 @@ skills-lock.json
 browser_session/
 downloaded_files/
 saved_cookies/
+ 
+dashboard/
+client_secrets*.json
+youtube_token.json
+scripts/run_oauth_and_sync.py

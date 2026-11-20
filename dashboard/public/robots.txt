@@ -1,4 +1,0 @@
-User-agent: *
-Allow: /
-
-Sitemap: https://muslim-lantern-archive.vercel.app/sitemap.xml
