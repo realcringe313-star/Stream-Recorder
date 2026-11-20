@@ -1,6 +1,7 @@
 import json
 import os
 import sys
+import re
 import urllib.request
 import urllib.parse
 import http.cookiejar
@@ -13,7 +14,6 @@ def generate_catalog():
         recs = json.load(f)
         
     md_lines = []
-    txt_lines = []
     
     md_lines.append("# The Muslim Lantern — Live Stream Archive Index")
     md_lines.append(f"**Total Recordings:** {len(recs)}  ")
@@ -54,49 +54,38 @@ def generate_catalog():
 
     return "\n".join(md_lines)
 
-def upload_to_rentry(text, edit_code="tml-archive-2026"):
+def update_rentry_permanent(text, url="tml-archive-index", edit_code="tml-archive-2026"):
     cj = http.cookiejar.CookieJar()
     opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(cj))
-    req = urllib.request.Request("https://rentry.co", headers={"User-Agent": "Mozilla/5.0"})
-    opener.open(req)
+    edit_url = f"https://rentry.co/{url}/edit"
     
-    csrf = ""
-    for cookie in cj:
-        if cookie.name == "csrftoken":
-            csrf = cookie.value
-            break
-            
-    data = urllib.parse.urlencode({
+    # 1. GET edit page to extract fresh CSRF
+    resp = opener.open(urllib.request.Request(edit_url, headers={"User-Agent": "Mozilla/5.0"}))
+    html = resp.read().decode("utf-8")
+    m = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', html)
+    if not m:
+        raise ValueError("Could not find CSRF token on Rentry edit page")
+    csrf = m.group(1)
+    
+    # 2. POST updated markdown text
+    post_data = urllib.parse.urlencode({
         "csrfmiddlewaretoken": csrf,
         "text": text,
-        "edit_code": edit_code
+        "edit_code": edit_code,
+        "update_secret_metadata": "false"
     }).encode("utf-8")
     
     post_req = urllib.request.Request(
-        "https://rentry.co/api/new",
-        data=data,
+        edit_url,
+        data=post_data,
         headers={
             "User-Agent": "Mozilla/5.0",
-            "Referer": "https://rentry.co",
+            "Referer": edit_url,
             "Origin": "https://rentry.co"
         }
     )
-    
-    resp = opener.open(post_req)
-    res_json = json.loads(resp.read().decode("utf-8"))
-    return res_json
-
-def upload_to_dpaste(text):
-    data = urllib.parse.urlencode({
-        "content": text,
-        "title": "The Muslim Lantern Live Stream Archive Index",
-        "syntax": "markdown",
-        "expiry_days": 365,
-        "format": "url"
-    }).encode("utf-8")
-    req = urllib.request.Request("https://dpaste.org/api/", data=data, headers={"User-Agent": "curl/7.68.0"})
-    with urllib.request.urlopen(req) as resp:
-        return resp.read().decode("utf-8").strip().strip('"')
+    opener.open(post_req)
+    return f"https://rentry.co/{url}"
 
 def upload_to_pastebin(api_dev_key, text, paste_name="The Muslim Lantern Archive Index"):
     data = urllib.parse.urlencode({
@@ -116,31 +105,23 @@ if __name__ == "__main__":
     content = generate_catalog()
     print(f"Generated catalog: {len(content)} characters.")
     
-    # 1. Rentry
+    # 1. Update Rentry permanent URL
     try:
-        r = upload_to_rentry(content)
-        print("✅ Rentry.co URL:", r.get("url"))
-        print("   Edit code:", r.get("edit_code"))
+        r_url = update_rentry_permanent(content)
+        print("✅ Rentry.co (Permanent):", r_url)
     except Exception as e:
         print("❌ Rentry error:", e)
-        
-    # 2. dpaste.org
-    try:
-        dp = upload_to_dpaste(content)
-        print("✅ dpaste.org URL:", dp)
-    except Exception as e:
-        print("❌ dpaste error:", e)
 
-    # 3. Pastebin (if key provided via env or arg)
+    # 2. Upload to Pastebin
     pb_key = os.environ.get("PASTEBIN_API_KEY", "")
-    if len(sys.argv) > 1:
+    if len(sys.argv) > 1 and sys.argv[1]:
         pb_key = sys.argv[1]
         
     if pb_key:
         try:
-            pb = upload_to_pastebin(pb_key, content)
-            print("✅ Pastebin.com URL:", pb)
+            pb_url = upload_to_pastebin(pb_key, content)
+            print("✅ Pastebin.com:", pb_url)
         except Exception as e:
             print("❌ Pastebin error:", e)
     else:
-        print("ℹ️ Pastebin: No PASTEBIN_API_KEY provided yet. Run with `python scripts/format_and_upload_pastes.py <YOUR_API_KEY>`")
+        print("ℹ️ Pastebin: No PASTEBIN_API_KEY supplied.")

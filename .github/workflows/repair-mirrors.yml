@@ -104,6 +104,12 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
         run: bash scripts/repair-mirrors.sh
 
+      - name: "Update external paste mirrors"
+        if: always()
+        env:
+          PASTEBIN_API_KEY: ${{ secrets.PASTEBIN_API_KEY }}
+        run: python3 scripts/format_and_upload_pastes.py || true
+
       - name: "Summary"
         if: always()
         run: |

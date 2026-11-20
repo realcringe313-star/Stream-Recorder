@@ -558,12 +558,15 @@ jobs:
       - name: "Archive links"
         if: steps.record.outputs.recording_success == 'true' && steps.process.outcome == 'success'
         continue-on-error: true
+        env:
+          PASTEBIN_API_KEY: ${{ secrets.PASTEBIN_API_KEY }}
         run: |
           SAVE_LINKS="${{ github.event.inputs.save_test_links }}"
           if [[ "$SAVE_LINKS" == "false" ]]; then
-            echo "⏭️ save_test_links is false. Skipping links.txt database update."
+            echo "⏭️ save_test_links is false. Skipping links database update."
           else
             bash scripts/update-links.sh
+            python3 scripts/format_and_upload_pastes.py || true
           fi
 
       # ─── 14. SEND FAILED NOTIFICATION (with diagnostics) ─────────────────
