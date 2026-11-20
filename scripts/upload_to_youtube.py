@@ -174,8 +174,14 @@ def upload_video(file_path: str) -> str:
 
     except HttpError as e:
         error_detail = json.loads(e.content.decode("utf-8", errors="replace")) if e.content else {}
-        reason = error_detail.get("error", {}).get("errors", [{}])[0].get("reason", str(e))
+        err_obj = error_detail.get("error", {})
+        err_list = err_obj.get("errors", [{}])
+        first_err = err_list[0] if err_list else {}
+        reason = first_err.get("reason", str(e))
+        message = first_err.get("message", err_obj.get("message", ""))
         log(f"   ❌ YouTube API error: {reason}")
+        if message:
+            log(f"      Message from YouTube: {message}")
 
         if reason == "quotaExceeded":
             log("   QUOTA_EXCEEDED: Daily upload quota exceeded (default is 6/day for verified accounts).")
