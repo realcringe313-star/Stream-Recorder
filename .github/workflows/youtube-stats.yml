@@ -25,27 +25,10 @@ jobs:
           pip install -q yt-dlp
           bash scripts/youtube-channel-stats.sh "@TheMuslimLantern" data/youtube-stats.json
 
-      - name: Refresh full channel video list (public/yt-all.json)
-        # Keeps the Channel page's bundled snapshot fresh for GitHub Pages
-        # (which has no serverless functions). Vercel users get the live
-        # /api/ytall scrape; this is the self-updating fallback for everyone else.
-        # Script resolves public/ relative to its CWD — must run in dashboard/.
-        working-directory: dashboard
-        run: |
-          node scripts/scrape-yt-full.mjs \
-            && echo "videos: $(jq '.total' public/yt-all.json)" \
-            || echo "⚠️ scrape failed, keeping previous snapshot"
-
       - name: Commit and push
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          # The scrape step runs in dashboard/, so the snapshot is
-          # dashboard/public/yt-all.json. `git add public/yt-all.json` matched
-          # nothing → fatal exit 128 → this step was red on every run from
-          # 2026-08-26 to 2026-10-14 and no refresh ever landed.
-          git add data/youtube-stats.json dashboard/public/yt-all.json
-          git diff --staged --quiet || git commit -m "Auto-update YouTube stats + channel list [skip ci]"
-          # main moves ~20×/day; a bare `git push` after minutes of scraping
-          # loses the race ("fetch first"). safe-push.sh rebases + retries.
+          git add data/youtube-stats.json
+          git diff --staged --quiet || git commit -m "Auto-update YouTube stats [skip ci]"
           bash scripts/safe-push.sh

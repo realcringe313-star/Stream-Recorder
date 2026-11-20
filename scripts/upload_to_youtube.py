@@ -23,6 +23,12 @@
 import json
 import os
 import sys
+import time
+import socket
+import ssl
+
+# Set a 120-second socket timeout so operations never hang indefinitely
+socket.setdefaulttimeout(120)
 
 # ── Google API imports ─────────────────────────────────────────────────────────
 # These are pip-installed in the workflow step before running this script.
@@ -113,7 +119,9 @@ def upload_video(file_path: str) -> str:
     try:
         youtube = build("youtube", "v3", credentials=creds)
 
-        media = MediaFileUpload(file_path, chunksize=256 * 1024, resumable=True)
+        # 10 MB chunks (multiple of 256 KB) — 40x faster than 256 KB, far fewer network round trips
+        chunk_size = 10 * 1024 * 1024
+        media = MediaFileUpload(file_path, chunksize=chunk_size, resumable=True)
 
         request = youtube.videos().insert(
             part="snippet,status",
@@ -121,18 +129,41 @@ def upload_video(file_path: str) -> str:
             media_body=media,
         )
 
-        # ── Resumable upload with progress ──
+        # ── Resumable upload with progress & retry backoff ──
         response = None
         last_progress = -1
+        retry_count = 0
+        max_retries = 10
 
         while response is None:
-            status, response = request.next_chunk()
-
-            if status:
-                progress = int(status.progress() * 100)
-                if progress != last_progress and progress % 10 == 0:
-                    log(f"      Upload progress: {progress}%")
-                    last_progress = progress
+            try:
+                status, response = request.next_chunk()
+                retry_count = 0  # reset on successful chunk
+                if status:
+                    progress = int(status.progress() * 100)
+                    if progress != last_progress:
+                        log(f"      Upload progress: {progress}%")
+                        last_progress = progress
+            except (socket.timeout, ConnectionError, ssl.SSLError, OSError) as net_err:
+                retry_count += 1
+                if retry_count > max_retries:
+                    log(f"   ❌ Exceeded max retries ({max_retries}) on chunk upload: {net_err}")
+                    raise
+                backoff = min(2 ** retry_count, 60)
+                log(f"      ⚠️ Network hiccup ({net_err}), retrying chunk in {backoff}s (attempt {retry_count}/{max_retries})...")
+                time.sleep(backoff)
+            except HttpError as http_err:
+                if http_err.resp.status >= 500:
+                    retry_count += 1
+                    if retry_count > max_retries:
+                        log(f"   ❌ YouTube 5xx server error, retries exhausted: {http_err}")
+                        raise
+                    backoff = min(2 ** retry_count, 60)
+                    log(f"      ⚠️ YouTube 5xx server error, retrying in {backoff}s (attempt {retry_count}/{max_retries})...")
+                    time.sleep(backoff)
+                else:
+                    # 4xx client errors (quota, auth, invalid request) are not retryable
+                    raise
 
         video_id = response.get("id", "")
         log("   ✅ Upload complete!")
@@ -142,13 +173,13 @@ def upload_video(file_path: str) -> str:
         return video_id
 
     except HttpError as e:
-        error_detail = json.loads(e.content) if e.content else {}
+        error_detail = json.loads(e.content.decode("utf-8", errors="replace")) if e.content else {}
         reason = error_detail.get("error", {}).get("errors", [{}])[0].get("reason", str(e))
         log(f"   ❌ YouTube API error: {reason}")
 
         if reason == "quotaExceeded":
-            log("   Daily upload quota exceeded (default is 6/day for verified accounts).")
-            log("      Wait until your quota resets (midnight PT) or request more.")
+            log("   QUOTA_EXCEEDED: Daily upload quota exceeded (default is 6/day for verified accounts).")
+            log("   Wait until your quota resets (midnight PT) or request more quota.")
         elif reason == "uploadLimit":
             log("   Upload limit reached. Wait and retry later.")
         elif reason == "insufficientPermissions":
@@ -156,9 +187,6 @@ def upload_video(file_path: str) -> str:
             log("      Delete and re-authorize with the correct scopes.")
         elif reason in ("videoNotEligibleForUpload", "uploadLimitExceeded",
                         "tooLong", "videoTooLong"):
-            # YouTube returns one of these when the file exceeds the 15-min
-            # cap on unverified accounts. The actual message is usually
-            # 'Account must be verified to upload videos longer than 15 minutes.'
             log("   This account is NOT verified by phone.")
             log("      Unverified accounts can only upload videos up to 15 minutes.")
             log("      Verify at: https://www.youtube.com/verify")
