@@ -18,12 +18,49 @@ from google_auth_oauthlib.flow import InstalledAppFlow
 
 SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
 
-# Accept both filenames, user might name it either way
-CLIENT_SECRETS_FILE = None
-for name in ["client_secrets.json", "client_secret.json"]:
-    if os.path.exists(name):
-        CLIENT_SECRETS_FILE = name
-        break
+import glob
+import json
+import os
+import sys
+
+# These are installed by the user: pip install google-auth-oauthlib
+from google_auth_oauthlib.flow import InstalledAppFlow
+
+SCOPES = ["https://www.googleapis.com/auth/youtube.upload"]
+
+def find_client_secrets():
+    # 1. Command-line argument
+    if len(sys.argv) > 1 and os.path.exists(sys.argv[1]):
+        return sys.argv[1]
+
+    # 2. Check current dir and scripts dir
+    candidates = [
+        "client_secrets.json",
+        "client_secret.json",
+        os.path.join(os.path.dirname(__file__), "client_secrets.json"),
+        os.path.join(os.path.dirname(__file__), "client_secret.json"),
+    ]
+    for c in candidates:
+        if os.path.exists(c):
+            return c
+
+    # 3. Check Downloads folder
+    user_home = os.path.expanduser("~")
+    downloads_patterns = [
+        os.path.join(user_home, "Downloads", "client_secret*.json"),
+        os.path.join(user_home, "Downloads", "New folder", "client_secret*.json"),
+        os.path.join(user_home, "Downloads", "*client_secret*.json"),
+    ]
+    for pat in downloads_patterns:
+        matches = glob.glob(pat)
+        if matches:
+            # Sort by newest
+            matches.sort(key=os.path.getmtime, reverse=True)
+            return matches[0]
+
+    return None
+
+CLIENT_SECRETS_FILE = find_client_secrets()
 
 
 def main():
