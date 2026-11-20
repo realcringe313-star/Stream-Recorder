@@ -71,3 +71,6 @@ dashboard/
 client_secrets*.json
 youtube_token.json
 scripts/run_oauth_and_sync.py
+ 
+restore_to_new_github_repo.py
+STREAM_RECORDER_MASTER_BACKUP_CREDENTIALS.txt
