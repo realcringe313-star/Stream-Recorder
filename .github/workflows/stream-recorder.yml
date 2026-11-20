@@ -15,12 +15,10 @@ name: "Stream Recorder"
 # ═══════════════════════════════════════════════════════════════════════════════
 
 on:
-  # Scheduled: Every 5 minutes. GitHub silently throttles this on inactive
-  # repos, see https://docs.github.com/en/actions/learn-github-actions/events-that-trigger-workflows#schedule
-  # We supplement with repository_dispatch from an external 5-min pinger
-  # (see PINGER.md) which is NOT throttled, giving real 5-min coverage.
+  # Scheduled: Active only during Pakistan night time (9:00 PM to 6:00 AM PKT = 16:00 to 01:59 UTC).
+  # Daytime (7:00 AM to 8:59 PM PKT = 02:00 to 15:59 UTC) is silent to prevent compute waste.
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "*/5 16-23,0-1 * * *"
 
   # External pinger trigger, call this via:
   #   POST /repos/usermuneeb1/Stream-Recorder/dispatches
@@ -371,17 +369,19 @@ jobs:
           (( MAX_H < 1 )) && MAX_H=1
           (( MAX_H > 5 )) && MAX_H=5
 
+          # ── ENFORCE NIGHTTIME STREAM WINDOW (9 PM - 6 AM PKT = 16:00 - 01:59 UTC) ──
+          # If scheduled trigger somehow fires during daytime, exit immediately.
+          CURRENT_HOUR_UTC=$(date -u +%-H)
+          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+            if (( CURRENT_HOUR_UTC >= 2 && CURRENT_HOUR_UTC < 16 )); then
+              echo "Daytime ($(( (CURRENT_HOUR_UTC + 5) % 24 )):00 PKT): Outside stream window (9 PM - 6 AM PKT). Exiting to save compute."
+              exit 0
+            fi
+          fi
+
           # ── AUTO WAIT-FOR-LIVE on scheduled / repository_dispatch triggers ──
-          # GitHub Actions silently throttles cron schedules on inactive repos:
-          # our `*/5 * * * *` cron actually fired only 2 times in 24h on
-          # 2026-06-27 (instead of ~288). That's why a live stream was missed.
-          # Mitigation: when the workflow IS triggered (by ANY non-manual
-          # event), it polls for the stream for up to 1 hour before exiting.
-          # Combined with an external 5-min pinger hitting
-          # repository_dispatch, this gives near-continuous coverage even
-          # when GitHub silently skips cron ticks.
           if [[ "$WAIT_MODE" != "true" ]] && [[ "${{ github.event_name }}" != "workflow_dispatch" ]]; then
-            echo "Auto wait-for-live (scheduled trigger), polling for 1h"
+            echo "Auto wait-for-live (nighttime stream window: 9 PM - 6 AM PKT), polling for 1h"
             WAIT_MODE="true"
             MAX_H=1
           fi
