@@ -101,7 +101,7 @@ def main():
         prompt="consent",
     )
 
-    # Save token to file
+    # Save token to file in both current dir and repo root
     token_data = {
         "token": credentials.token,
         "refresh_token": credentials.refresh_token,
@@ -113,24 +113,30 @@ def main():
     with open("youtube_token.json", "w") as f:
         json.dump(token_data, f, indent=2)
 
+    repo_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    target_path = os.path.join(repo_dir, "youtube_token.json")
+    if target_path != os.path.abspath("youtube_token.json"):
+        with open(target_path, "w") as f:
+            json.dump(token_data, f, indent=2)
+
+    # Also ensure client_secrets.json is saved to repo root
+    cs_target = os.path.join(repo_dir, "client_secrets.json")
+    if os.path.abspath(CLIENT_SECRETS_FILE) != cs_target:
+        import shutil
+        shutil.copyfile(CLIENT_SECRETS_FILE, cs_target)
+
     print()
     print("╔═══════════════════════════════════════════════════════════════╗")
     print("║  ✅ SUCCESS! Token saved to youtube_token.json              ║")
     print("╚═══════════════════════════════════════════════════════════════╝")
     print()
-    print("Now add these as GitHub Secrets:")
+    print(f"  Refresh Token: {credentials.refresh_token[:20]}...")
     print()
-    print("1. Open client_secrets.json with Notepad → copy ALL text")
-    print("   Secret name: YOUTUBE_CLIENT_SECRETS")
-    print()
-    print("2. Open youtube_token.json with Notepad → copy ALL text")
-    print("   Secret name: YOUTUBE_TOKEN")
-    print()
-    print(f"  Refresh Token: {credentials.refresh_token}")
-    print()
-    print("⚠️  The refresh token does NOT expire unless you revoke access.")
-    print()
-    input("Press Enter to exit...")
+    if sys.stdin.isatty():
+        try:
+            input("Press Enter to exit...")
+        except EOFError:
+            pass
 
 
 if __name__ == "__main__":
