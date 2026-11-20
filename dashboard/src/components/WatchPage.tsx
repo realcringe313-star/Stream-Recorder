@@ -71,7 +71,7 @@ function buildMirrors(rec: Ep): Mirror[] {
   // NOTE: VikingFile is intentionally NOT in the cascade — its links are
   // share pages (200 text/html), unplayable in <video> (proven 2026-09-04).
   // It stays in THE VAULT below as a download link.
-  if (rec.st0807Link) out.push({ label: '0807', note: '0807.st CDN', url: rec.st0807Link, kind: 'mp4', type: 'st0807' });
+  if (rec.st0807Link) out.push({ label: rec.st0807Link.includes('dropdrive') ? 'DropDrive' : '0807', note: rec.st0807Link.includes('dropdrive') ? 'DropDrive CDN' : '0807.st CDN', url: rec.st0807Link, kind: 'mp4', type: 'st0807' });
   // Pixeldrain direct stream — derivable from the u/<id> page link; a real
   // CDN playback source (present for every recording) that never depends on
   // the guessed archive filename or the Telegram worker.
@@ -494,7 +494,7 @@ export default function WatchPage({ rec, recs, onClose, onOpen, toast }: Props) 
     { label: 'Archive.org', href: rec.archiveLink, color: '#e50914', perm: true },
     { label: 'GitHub', href: rec.githubDirect || rec.githubRelease, color: '#9aa0a6', perm: true },
     { label: 'MEGA', href: rec.megaLink, color: '#d92753', perm: true },
-    { label: '0807.st', href: rec.st0807Link, color: '#c45c26', perm: false },
+    { label: rec.st0807Link?.includes('dropdrive') ? 'DropDrive' : '0807.st', href: rec.st0807Link, color: '#c45c26', perm: false },
     { label: 'VikingFile', href: rec.vikingfileLink, color: '#6b8f3d', perm: false },
     { label: 'Pixeldrain', href: rec.pixeldrainLink, color: '#4f9ee8', perm: false },
     { label: 'Gofile', href: rec.gofileLink, color: '#3ba97c', perm: false },

@@ -25,10 +25,9 @@
 name: "Go-live sniper"
 
 on:
-  repository_dispatch:
-    types: [ping-sniper]
-  schedule:
-    - cron: "*/5 * * * *"
+  # Automated schedule disabled per user request (redundant with Stream Recorder)
+  # schedule:
+  #   - cron: "*/5 * * * *"
   workflow_dispatch:
 
 concurrency:

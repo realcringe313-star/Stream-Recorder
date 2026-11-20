@@ -62,7 +62,8 @@ env:
   PIXELDRAIN_API_KEY: ${{ secrets.PIXELDRAIN_API_KEY }}
   # Optional 0807.st partner token: skips the proof-of-work and lifts the
   # anonymous size cap. Empty = anonymous PoW upload (unchanged behaviour).
-  ST0807_TOKEN: ${{ secrets.ST0807_TOKEN }}
+  ST0807_TOKEN: ${{ secrets.DROPDRIVE_TOKEN || secrets.ST0807_TOKEN }}
+  DROPDRIVE_TOKEN: ${{ secrets.DROPDRIVE_TOKEN || secrets.ST0807_TOKEN }}
   MEGA_EMAIL: ${{ secrets.MEGA_EMAIL }}
   MEGA_PASSWORD: ${{ secrets.MEGA_PASSWORD }}
   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}

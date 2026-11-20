@@ -719,96 +719,32 @@ _st0807_curl() {
     fi
 }
 
-upload_to_st0807() {
+upload_to_dropdrive() {
     local file="$1"
     local part_name="$2"
-    local token="${ST0807_TOKEN:-}"
     local fsize
     fsize=$(get_file_size "$file")
+    log_info "  DropDrive: Uploading $(basename "$file") ($(format_size "$fsize"))..."
 
-    log_info "  0807.st: Uploading $(basename "$file") ($(format_size "$fsize"))..."
+    local output
+    output=$(python3 "$SCRIPT_DIR/dropdrive_upload.py" "$file" "$part_name" 2>&1)
+    local rc=$?
+    local link
+    link=$(echo "$output" | grep -oE 'https://dropdrive\.rip/d/[a-zA-Z0-9_-]+' | tail -1)
 
-    local max_retries="${ST0807_MAX_RETRIES:-3}"
-    local attempt=1
-    local simple_limit=$((1800 * 1024 * 1024))                                   # under the 2 GB single-POST cap
-    local anon_simple_limit="${ST0807_ANON_SIMPLE_LIMIT:-$((32 * 1024 * 1024))}" # PoW ttl race, see header
-
-    local use_chunked=false
-    if [[ "${ST0807_FORCE_CHUNKED:-false}" == "true" ]] || (( fsize > simple_limit )); then
-        use_chunked=true
-    elif [[ -z "$token" ]] && (( fsize > anon_simple_limit )); then
-        use_chunked=true
-        log_info "  0807.st: anonymous + $(format_size "$fsize") > $(format_size "$anon_simple_limit") → chunked flow (PoW validated at /upload/init)"
+    if [[ -n "$link" ]]; then
+        log_ok "  DropDrive: ✅ Upload complete!"
+        log_info "  DropDrive: Link → ${link}"
+        ST0807_LINKS+=("${part_name}|${link}")
+        return 0
+    else
+        log_warn "  DropDrive: Upload failed (rc=$rc): ${output:0:200}"
+        return 1
     fi
+}
 
-    while (( attempt <= max_retries )); do
-        local upload_start upload_response link
-        upload_start=$(now_epoch)
-        local tok_state="pow"
-        [[ -n "$token" ]] && tok_state="yes"
-        log_debug "  0807.st attempt ${attempt}/${max_retries} (token=$tok_state, chunked=$use_chunked)"
-
-        local http_code="" stage="simple POST"
-        if [[ "$use_chunked" != true ]]; then
-            # Field ORDER matters for anonymous uploads: the proof must reach
-            # the server before the file body, so pow_* come first.
-            local -a curl_args=(--max-time "${UPLOAD_TIMEOUT:-3600}" -F "expiry=0" -F "maxdl=0")
-            if [[ -n "$token" ]]; then
-                curl_args+=(-H "Authorization: Bearer ${token}")
-            else
-                local pow
-                pow=$(_st0807_pow_json)
-                if [[ -z "$pow" ]] || ! echo "$pow" | jq -e '.pow_nonce' >/dev/null 2>&1; then
-                    log_warn "  0807.st: proof-of-work failed (attempt ${attempt})"
-                    (( ++attempt )); sleep "${ST0807_RETRY_SLEEP:-5}"; continue
-                fi
-                curl_args+=(-F "pow_id=$(echo "$pow" | jq -r '.pow_id')")
-                curl_args+=(-F "pow_ts=$(echo "$pow" | jq -r '.pow_ts')")
-                curl_args+=(-F "pow_bits=$(echo "$pow" | jq -r '.pow_bits')")
-                curl_args+=(-F "pow_sig=$(echo "$pow" | jq -r '.pow_sig')")
-                curl_args+=(-F "pow_nonce=$(echo "$pow" | jq -r '.pow_nonce')")
-            fi
-            curl_args+=(-F "file=@${file}")
-            _st0807_curl "${curl_args[@]}" "https://0807.st/upload"
-            http_code="$ST0807_HTTP"; upload_response="$ST0807_BODY"
-        else
-            stage="chunked"
-            # runs in a subshell: the HTTP code travels inside the JSON (.http)
-            upload_response=$(_st0807_chunked_upload "$file" "$token") || true
-            http_code=$(jq -r '.http // empty' <<< "$upload_response" 2>/dev/null || true)
-        fi
-
-        local upload_elapsed=$(( $(now_epoch) - upload_start ))
-        link=$(_st0807_parse_url "$upload_response")
-
-        if [[ -n "$link" ]]; then
-            local speed
-            (( upload_elapsed > 0 )) && speed=$(format_size $(( fsize / upload_elapsed ))) || speed="instant"
-            log_ok "  0807.st: ✅ Upload complete (${stage}), ${upload_elapsed}s (${speed}/s)"
-            log_info "  0807.st: Link → ${link}"
-            # The deletion URL is the ONLY way to remove the file later. Run
-            # logs are private to the repo; never put it in public JSON.
-            local del_url
-            del_url=$(echo "$upload_response" | jq -r '.deletion_url // empty' 2>/dev/null)
-            [[ -n "$del_url" ]] && log_info "  0807.st: deletion_url (keep private) → ${del_url}"
-            ST0807_LINKS+=("${part_name}|${link}")
-            return 0
-        fi
-
-        _st0807_report_failure "${stage} (attempt ${attempt}/${max_retries})" "$http_code" "$upload_response" "$fsize"
-
-        if [[ "$http_code" == "429" ]]; then
-            _st0807_rate_limit_pause
-        elif [[ "$stage" == "simple POST" ]] && _st0807_size_rejected "$http_code" "$upload_response"; then
-            log_warn "  0807.st: simple POST rejected on size, switching to chunked upload"
-            use_chunked=true
-        fi
-        (( ++attempt ))
-        sleep "${ST0807_RETRY_SLEEP:-5}"
-    done
-
-    log_error "  0807.st: ❌ All ${max_retries} attempts failed"
-    return 1
+upload_to_st0807() {
+    upload_to_dropdrive "$@"
 }
 
 # Chunked flow: POST /upload/init (JSON, carries the PoW when anonymous) →
@@ -1301,20 +1237,20 @@ upload_to_clouds() {
             log_info "  MEGA.nz: Skipped (no credentials)" 
         fi
 
-        # ── 5. 0807.st (HD) ──
-        if [[ "${ST0807_SKIP:-false}" != "true" ]]; then
+        # ── 5. DropDrive (HD) [formerly 0807.st] ──
+        if [[ "${DROPDRIVE_SKIP:-false}" != "true" && "${ST0807_SKIP:-false}" != "true" ]]; then
             (( ++expected_total_uploads ))
-            if upload_to_st0807 "$f" "$part_name"; then
+            if upload_to_dropdrive "$f" "$part_name"; then
                 (( ++svc_success ))
             else
-                log_warn "  0807.st: First attempt failed, retrying after 10s..."
+                log_warn "  DropDrive: First attempt failed, retrying after 10s..."
                 sleep 10
-                if upload_to_st0807 "$f" "$part_name"; then
+                if upload_to_dropdrive "$f" "$part_name"; then
                     (( ++svc_success ))
                 fi
             fi
         else
-            log_info "  0807.st: Skipped (ST0807_SKIP=true)"
+            log_info "  DropDrive: Skipped (DROPDRIVE_SKIP=true)"
         fi
 
         # ── 6. VikingFile (HD) ──
@@ -1391,7 +1327,7 @@ upload_to_clouds() {
     [[ -n "$pixeldrain_str"   ]] && log_ok  "  Pixeldrain   ✅ : ${PIXELDRAIN_LINKS[*]}"
     [[ -n "$archive_str"      ]] && log_ok  "  Archive.org  ✅ : ${ARCHIVE_LINKS[*]}"
     [[ -n "$mega_str"         ]] && log_ok  "  MEGA.nz      ✅ : ${MEGA_LINKS[*]}"
-    [[ -n "$st0807_str"       ]] && log_ok  "  0807.st      ✅ : ${ST0807_LINKS[*]}"
+    [[ -n "$st0807_str"       ]] && log_ok  "  DropDrive    ✅ : ${ST0807_LINKS[*]}"
     [[ -n "$vikingfile_str"   ]] && log_ok  "  VikingFile   ✅ : ${VIKINGFILE_LINKS[*]}"
     log_separator
 
