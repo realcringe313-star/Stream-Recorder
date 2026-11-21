@@ -1,0 +1,112 @@
+# ─────────────────────────────────────────────────────────────────────────────
+#  RECORDER NIGHT WATCH
+#  Keeps the Stream Recorder running continuously through the Pakistan night
+#  window without depending on GitHub's throttled */5 cron or an external
+#  cron-job.org pinger.
+#
+#  GitHub silently collapses high-frequency schedules (the recorder's */5 cron
+#  fired only ~2 times per night on 2026-11-20/21). This workflow is scheduled
+#  only a few times per night; each run stays alive and dispatches the recorder
+#  again as soon as the previous recorder run finishes, so coverage is
+#  continuous from ~9 PM to ~8 AM PKT.
+#
+#  This is a companion, not a replacement: the recorder's own schedule remains
+#  as a fallback. All dispatches go through the same concurrency group, so the
+#  recorder still records only one stream at a time.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: "Recorder night watch"
+
+on:
+  schedule:
+    # 8:50 PM, 11:50 PM and 2:50 AM PKT. Overlapping on purpose: if GitHub
+    # delays one slot, another still starts the watch.
+    - cron: "50 15 * * *"
+    - cron: "50 18 * * *"
+    - cron: "50 21 * * *"
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+concurrency:
+  group: recorder-night-watch
+  cancel-in-progress: true
+
+env:
+  TZ: Asia/Karachi
+  GH_PAT: ${{ secrets.GH_PAT }}
+
+jobs:
+  watch:
+    name: "Keep recorder dispatching"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+
+    steps:
+      - name: "Dispatch recorder while it is night in Pakistan"
+        run: |
+          set -u
+
+          if [[ -z "${GH_PAT:-}" ]]; then
+            echo "::error::GH_PAT is not set; cannot dispatch the recorder."
+            exit 1
+          fi
+
+          API="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions"
+          AUTH=(-H "Authorization: Bearer ${GH_PAT}" -H "Accept: application/vnd.github+json")
+
+          # Leave a 20-minute cushion under the 350-minute job timeout.
+          END=$(( $(date +%s) + 5 * 3600 + 30 * 60 ))
+
+          while (( $(date +%s) < END )); do
+            H=$(date -u +%-H)
+
+            # 02:00-15:59 UTC = 7 AM-8:59 PM PKT. Stop; the recorder schedule
+            # itself is silent in this window too.
+            if (( H >= 2 && H < 16 )); then
+              echo "Daytime ($(( (H + 5) % 24 )):00 PKT) — night watch finished."
+              break
+            fi
+
+            # Ask GitHub whether a recorder run is already active or queued.
+            # On an API error, skip the dispatch (never blind-fire runs).
+            RUNS_JSON=$(curl -fsS --max-time 30 "${AUTH[@]}" \
+              "${API}/workflows/stream-recorder.yml/runs?per_page=10" 2>/dev/null) || {
+              echo "[$(date '+%F %T %Z')] GitHub API read failed — not dispatching this pass."
+              sleep 300
+              continue
+            }
+
+            ACTIVE=$(printf '%s' "$RUNS_JSON" | jq -r '
+              [.workflow_runs[]
+               | select(.status == "in_progress"
+                        or .status == "queued"
+                        or .status == "waiting"
+                        or .status == "requested"
+                        or .status == "pending")] | length
+            ' 2>/dev/null) || ACTIVE="unknown"
+
+            if [[ "$ACTIVE" == "0" ]]; then
+              CODE=$(curl -sS --max-time 30 -o /tmp/dispatch.out -w "%{http_code}" \
+                -X POST "${AUTH[@]}" \
+                -H "Content-Type: application/json" \
+                "${API}/workflows/stream-recorder.yml/dispatches" \
+                -d '{"ref":"main","inputs":{"wait_for_live":"true","wait_max_hours":"1"}}') || CODE="000"
+
+              echo "[$(date '+%F %T %Z')] No active recorder run — dispatch HTTP ${CODE}"
+              if [[ "$CODE" != "204" ]]; then
+                echo "::warning::Recorder dispatch failed (HTTP ${CODE})"
+                cat /tmp/dispatch.out 2>/dev/null || true
+              fi
+            elif [[ "$ACTIVE" == "unknown" ]]; then
+              echo "[$(date '+%F %T %Z')] Could not parse recorder run list — skipping dispatch."
+            else
+              echo "[$(date '+%F %T %Z')] Recorder already active/queued (${ACTIVE}) — waiting."
+            fi
+
+            sleep 300
+          done
+
+          echo "Night watch ended at $(date '+%F %T %Z')."
