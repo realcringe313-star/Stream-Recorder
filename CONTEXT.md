@@ -45,6 +45,12 @@ Operational map for anyone debugging or changing this repo. Read this FIRST.
   to the cascade, but the cookieless smoke workflow fails when required CDP
   fails. `tests/browser-cdp-test.sh`, `tests/test_browser_cdp.py`, and
   `tests/browser-session-test.sh` (legacy UC) lock these contracts.
+- **GitHub is never used as the recording archive (2026-11-22).** The owner
+  was previously suspended after MP4 files were uploaded as Release assets.
+  `github-release-mirror.yml` and `github-release-upload.py` are deliberately
+  removed. GitHub may suspend the whole account for using Actions/Releases as
+  permanent media hosting, so do not reintroduce MP4 release uploads.
+  `tests/no-github-media-upload-test.sh` is the drift guard.
 - **Archive.org object names are underscore-folded (2026-10-23).** The uploader
   names uploads with `make_safe_filename()` (`upload-clouds.sh`): spaces and
   punctuation become `_`. Any offline derivation of `archive_direct` MUST use
