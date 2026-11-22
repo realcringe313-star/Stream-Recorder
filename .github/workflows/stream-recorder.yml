@@ -128,9 +128,11 @@ jobs:
       - name: "Cleanup old workflow runs"
         continue-on-error: true
         run: |
-          # Delete old completed runs to keep Actions tab clean (keep latest 5).
+          # Delete old completed runs while preserving enough history to
+          # investigate a missed stream. Keeping only five runs destroyed the
+          # evidence for the 2026-11-21/22 missed recording.
           # This step is intentionally best-effort and must never block recording.
-          echo "Cleaning up old workflow runs..."
+          echo "Cleaning up old workflow runs (keeping latest 50)..."
           if [[ -z "${GH_PAT:-}" ]]; then
             echo "ℹ️ GH_PAT not set, skipping workflow cleanup"
             exit 0
@@ -141,8 +143,8 @@ jobs:
           fi
           RUNS=$(curl -fsS -H "Authorization: token ${GH_PAT}" \
             -H "Accept: application/vnd.github+json" \
-            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stream-recorder.yml/runs?per_page=50&status=completed" \
-            | jq -r '.workflow_runs[5:] | .[].id' 2>/dev/null) || true
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stream-recorder.yml/runs?per_page=100&status=completed" \
+            | jq -r '.workflow_runs[50:] | .[].id' 2>/dev/null) || true
           
           deleted=0
           for run_id in $RUNS; do

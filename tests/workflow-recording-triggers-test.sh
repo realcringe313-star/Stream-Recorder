@@ -13,6 +13,17 @@ for p in (root/'.github/workflows').glob('*.yml'):
     names[p.name]=w.get('name',p.stem)
 assert names['stream-recorder.yml']=='Stream Recorder'
 assert names['stream-sniper.yml']=='Go-live sniper'
+
+# A missed live stream must keep the recorder alive without relying on the
+# throttled */5 scheduler. Each completed recorder run starts another night
+# watcher through workflow_run; the watcher then dispatches the next recorder.
+night=root/'.github/workflows/recorder-night-watch.yml'
+nw=yaml.safe_load(night.read_text())
+nw_on=nw.get('on',nw.get(True,{}))
+chain=nw_on.get('workflow_run',{})
+assert 'Stream Recorder' in chain.get('workflows',[]), \
+       'night watch must continue from completed Stream Recorder runs'
+
 consumers=['thumbnail-gen','storyboard-gen','telegram-mirror','youtube-ghost-host',
            'chat-archiver','catbox-mirror','auto-issue']
 missing=[]

@@ -4,11 +4,19 @@
 #  window without depending on GitHub's throttled */5 cron or an external
 #  cron-job.org pinger.
 #
-#  GitHub silently collapses high-frequency schedules (the recorder's */5 cron
-#  fired only ~2 times per night on 2026-11-20/21). This workflow is scheduled
-#  only a few times per night; each run stays alive and dispatches the recorder
-#  again as soon as the previous recorder run finishes, so coverage is
-#  continuous from ~9 PM to ~8 AM PKT.
+#  2026-11-22 incident: a livestream started at 1:52 AM PKT, but GitHub delayed
+#  the recorder's high-frequency schedule until 3:26 AM. The old night-watch
+#  workflow only had three late bootstrap slots and was itself delayed. Result:
+#  the live stream was never checked, so there was no recording and no failure
+#  notification.
+#
+#  The fix has two independent layers:
+#    1. Several overlapping low-frequency bootstrap slots start before the
+#       observed 1:52 AM stream window, beginning at 6:20 PM PKT.
+#    2. Every completed Stream Recorder run triggers this workflow through
+#       `workflow_run` (not the throttled scheduler), which starts the next
+#       recorder immediately. Once bootstrapped, coverage stays continuous
+#       until the 7 AM PKT cutoff without relying on */5 cron.
 #
 #  This is a companion, not a replacement: the recorder's own schedule remains
 #  as a fallback. All dispatches go through the same concurrency group, so the
@@ -19,11 +27,20 @@ name: "Recorder night watch"
 
 on:
   schedule:
-    # 8:50 PM, 11:50 PM and 2:50 AM PKT. Overlapping on purpose: if GitHub
-    # delays one slot, another still starts the watch.
-    - cron: "50 15 * * *"
-    - cron: "50 18 * * *"
-    - cron: "50 21 * * *"
+    # PKT is UTC+5. These overlapping slots bracket the observed 1:52 AM
+    # stream window; any one of them can bootstrap the event-driven chain.
+    - cron: "20 13 * * *"  # 6:20 PM PKT
+    - cron: "20 15 * * *"  # 8:20 PM PKT
+    - cron: "20 17 * * *"  # 10:20 PM PKT
+    - cron: "20 19 * * *"  # 12:20 AM PKT
+    - cron: "20 21 * * *"  # 2:20 AM PKT
+    - cron: "20 23 * * *"  # 4:20 AM PKT
+  # This is the high-reliability bootstrap continuation. `workflow_run` is an
+  # event trigger, not a schedule, so GitHub cron throttling cannot leave a gap
+  # between one recorder run ending and the next one starting at night.
+  workflow_run:
+    workflows: ["Stream Recorder"]
+    types: [completed]
   workflow_dispatch:
 
 permissions:
@@ -106,7 +123,10 @@ jobs:
               echo "[$(date '+%F %T %Z')] Recorder already active/queued (${ACTIVE}) — waiting."
             fi
 
-            sleep 300
+            # workflow_run normally replaces this watcher within seconds of a
+            # recorder finishing. Keep the fallback poll short so a missed event
+            # cannot create a meaningful coverage gap.
+            sleep 120
           done
 
           echo "Night watch ended at $(date '+%F %T %Z')."

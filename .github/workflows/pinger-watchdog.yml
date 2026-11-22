@@ -1,12 +1,10 @@
 # ╔══════════════════════════════════════════════════════════════════════════════╗
-# ║   PINGER WATCHDOG                                                           ║
-# ║  Watches ONE thing: the stream-recorder's dispatch heartbeat from the       ║
-# ║  external pinger (cron-job.org). Alerts Discord ONLY when coverage is       ║
-# ║  genuinely degrading — i.e. dispatches used to arrive and stopped.          ║
-# ║                                                                              ║
-# ║  The go-live sniper is intentionally NOT watched here: its own */5          ║
-# ║  schedule fallback provides independent capture coverage, so its            ║
-# ║  dispatch count is not an outage signal.                                    ║
+# ║   RECORDER COVERAGE WATCHDOG                                                ║
+# ║  Watches whether the Stream Recorder has an active run during the Pakistan  ║
+# ║  night window. The 2026-11-22 incident was green because no recorder run    ║
+# ║  was created at 1:52 AM, so recording-level error handlers were never       ║
+# ║  reached. This watchdog alerts on the missing run itself, regardless of     ║
+# ║  whether it came from schedule, workflow_dispatch, or repository_dispatch.  ║
 # ╚══════════════════════════════════════════════════════════════════════════════╝
 
 name: "Pinger watchdog"
@@ -15,10 +13,14 @@ on:
   schedule:
     # Every 30 minutes (two slots per hour, offset to clear the pinger cadence)
     - cron: "23,53 * * * *"
+  # Event-driven checks make a broken night-watch chain visible immediately.
+  workflow_run:
+    workflows: ["Stream Recorder", "Recorder night watch"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       quiet_minutes:
-        description: "Alert if no dispatch-triggered run in this many minutes"
+        description: "Alert if there is no active/recent recorder run in this many minutes"
         required: false
         default: "20"
         type: string
@@ -48,7 +50,7 @@ jobs:
       - name: "Checkout"
         uses: actions/checkout@v7
 
-      - name: "Check stream-recorder dispatch heartbeat"
+      - name: "Check stream-recorder coverage"
         id: check
         env:
           QUIET_MINUTES: ${{ inputs.quiet_minutes || '20' }}
@@ -57,37 +59,55 @@ jobs:
           BASE="https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/stream-recorder.yml/runs"
           auth=(-H "Authorization: Bearer ${GH_TOKEN}" -H "Accept: application/vnd.github+json")
 
-          DISP=$(curl -fsS "${auth[@]}" "${BASE}?event=repository_dispatch&per_page=1" \
-            | jq -r '.workflow_runs[0].created_at // empty' 2>/dev/null || true)
+          H=$(date -u +%-H)
+          if (( H >= 2 && H < 16 )); then
+            echo "Night coverage is intentionally paused during daytime PKT."
+            echo "age=paused" >> "$GITHUB_OUTPUT"
+            echo "alert=no" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
 
-          if [[ -z "$DISP" ]]; then
-            # Never dispatched at all — check whether ANY run happened recently.
-            ANY=$(curl -fsS "${auth[@]}" "${BASE}?per_page=1" \
-              | jq -r '.workflow_runs[0].created_at // empty' 2>/dev/null || true)
-            if [[ -z "$ANY" ]]; then
-              AGE="NEVER"
-            else
-              AGE_MIN=$(( ($(date +%s) - $(date -d "$ANY" +%s 2>/dev/null || echo 0)) / 60 ))
-              if (( AGE_MIN > 90 )); then AGE="STALE(${AGE_MIN}m)"; else AGE="schedule-ok"; fi
-            fi
+          RUNS_JSON=$(curl -fsS --max-time 30 "${auth[@]}" "${BASE}?per_page=20" 2>/dev/null) || {
+            echo "age=unknown" >> "$GITHUB_OUTPUT"
+            echo "alert=no" >> "$GITHUB_OUTPUT"
+            echo "::warning::Could not read recorder run history; watchdog will retry."
+            exit 0
+          }
+
+          ACTIVE=$(printf '%s' "$RUNS_JSON" | jq -r '
+            [.workflow_runs[]
+             | select(.status == "in_progress"
+                      or .status == "queued"
+                      or .status == "waiting"
+                      or .status == "requested"
+                      or .status == "pending")] | length
+          ' 2>/dev/null) || ACTIVE="unknown"
+          LATEST=$(printf '%s' "$RUNS_JSON" | jq -r '.workflow_runs[0].created_at // empty' 2>/dev/null || true)
+
+          if [[ "$ACTIVE" =~ ^[1-9][0-9]*$ ]]; then
+            AGE="active(${ACTIVE})"
+          elif [[ -z "$LATEST" ]]; then
+            AGE="NEVER"
           else
-            AGE=$(( ($(date +%s) - $(date -d "$DISP" +%s 2>/dev/null || echo 0)) / 60 ))
+            AGE_MIN=$(( ($(date +%s) - $(date -d "$LATEST" +%s 2>/dev/null || echo 0)) / 60 ))
+            AGE="${AGE_MIN}m"
           fi
           echo "age=${AGE}" >> "$GITHUB_OUTPUT"
 
           ALERT="no"
           REASON=""
           case "$AGE" in
-            NEVER|STALE*)
-              ALERT="yes"
-              REASON="stream-recorder has never been triggered by repository_dispatch (${AGE}) — the scheduled fallback may be throttled too."
+            active*)
               ;;
-            schedule-ok)
+            NEVER)
+              ALERT="yes"
+              REASON="stream-recorder has no run history at all during the night window."
               ;;
             *)
-              if (( AGE > QUIET_MINUTES )); then
+              AGE_MIN="${AGE%m}"
+              if [[ "$AGE_MIN" =~ ^[0-9]+$ ]] && (( AGE_MIN > QUIET_MINUTES )); then
                 ALERT="yes"
-                REASON="stream-recorder dispatch heartbeat LOST — last ping ${AGE} min ago (quiet window: ${QUIET_MINUTES})."
+                REASON="stream-recorder coverage LOST — no active run and the latest run started ${AGE_MIN} min ago (quiet window: ${QUIET_MINUTES})."
               fi
               ;;
           esac
@@ -98,7 +118,7 @@ jobs:
       - name: "🚨 Alert — recorder coverage degrading"
         if: steps.check.outputs.alert == 'yes'
         run: |
-          MSG="🚨 **Pinger watchdog**:"$'\n'"$(cat /tmp/watchdog-reason.txt)"$'\n'"If a stream goes live now it could be missed. Check cron-job.org / the pinger config."
+          MSG="🚨 **Recorder coverage watchdog**:"$'\n'"$(cat /tmp/watchdog-reason.txt)"$'\n'"If a stream goes live now it could be missed. Check the Recorder night watch chain and GitHub Actions."
           echo "$MSG" >> "$GITHUB_STEP_SUMMARY"
           WEBHOOK="${DISCORD_WEBHOOK_ALERTS:-${DISCORD_WEBHOOK_URL:-}}"
           if [[ -n "$WEBHOOK" ]]; then
