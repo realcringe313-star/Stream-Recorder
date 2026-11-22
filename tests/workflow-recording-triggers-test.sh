@@ -25,7 +25,7 @@ assert 'Stream Recorder' in chain.get('workflows',[]), \
        'night watch must continue from completed Stream Recorder runs'
 
 consumers=['thumbnail-gen','storyboard-gen','telegram-mirror','youtube-ghost-host',
-           'chat-archiver','catbox-mirror','auto-issue']
+           'chat-archiver','auto-issue']
 missing=[]
 for stem in consumers:
     w=yaml.safe_load((root/f'.github/workflows/{stem}.yml').read_text())

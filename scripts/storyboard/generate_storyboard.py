@@ -7,7 +7,7 @@ For each recording, generates:
     Layout: COLS x N rows, each tile THUMB_W x THUMB_H pixels.
   • A WebVTT cues file that tells the player which sprite-coordinates to
     show for each second of the video.
-  • Uploads both to Catbox (permanent CDN, no expiry).
+  • Uploads both to Archive.org (permanent CDN, no expiry).
   • Stores `storyboard` { url, vtt, interval, cols, w, h } in recordings.json.
 
 The dashboard's <MediaPlayer> reads `storyboard` and shows a tooltip

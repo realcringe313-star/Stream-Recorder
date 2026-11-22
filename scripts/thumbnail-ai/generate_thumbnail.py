@@ -7,7 +7,7 @@
 # ║                                                                              ║
 # ║ 1. Extracts a good frame from the video (10% into the stream)                ║
 # ║ 2. Adds title overlay text + channel branding                                ║
-# ║ 3. Uploads to Catbox (permanent) + Archive.org                               ║
+# ║ 3. Uploads to Archive.org (permanent)                                        ║
 # ║ 4. Updates recordings.json with the custom thumbnail                         ║
 # ║                                                                              ║
 # ║ Also generates thumbnails for clips (auto-clip).                             ║
@@ -23,6 +23,9 @@ import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 RECORDINGS = os.path.join(ROOT, "data", "recordings.json")
+ARCHIVE_ACCESS_KEY = os.environ.get("ARCHIVE_ACCESS_KEY", "").strip()
+ARCHIVE_SECRET_KEY = os.environ.get("ARCHIVE_SECRET_KEY", "").strip()
+ARCHIVE_ITEM = os.environ.get("THUMBNAIL_ARCHIVE_ITEM", "muslim-lantern-thumbnails-v1")
 
 
 def log(msg):
@@ -93,20 +96,33 @@ def add_text_overlay(input_path, output_path, title, date_str, channel="The Musl
         return os.path.exists(output_path)
 
 
-def upload_to_catbox(file_path):
-    """Upload to Catbox.moe."""
+def upload_to_archive(file_path, remote_name):
+    """Upload a generated thumbnail to the shared Archive.org item."""
+    if not ARCHIVE_ACCESS_KEY or not ARCHIVE_SECRET_KEY:
+        log("Archive.org credentials are missing")
+        return None
+    url = f"https://s3.us.archive.org/{ARCHIVE_ITEM}/{remote_name}"
+    cmd = [
+        "curl", "-sS", "--max-time", "300",
+        "-o", "/dev/null", "-w", "%{http_code}",
+        "-H", f"authorization: LOW {ARCHIVE_ACCESS_KEY}:{ARCHIVE_SECRET_KEY}",
+        "-H", "x-archive-auto-make-bucket: 1",
+        "-H", "x-archive-meta-title: Muslim Lantern Thumbnails",
+        "-H", "x-archive-meta-creator: Stream Recorder Bot",
+        "-H", "x-archive-meta-mediatype: image",
+        "-H", "x-archive-meta-collection: opensource_media",
+        "-H", "Content-Type: image/jpeg",
+        "--upload-file", file_path,
+        url,
+    ]
     try:
-        result = subprocess.run(
-            ["curl", "-s", "-F", "reqtype=fileupload",
-             "-F", f"fileToUpload=@{file_path}",
-             "https://catbox.moe/user/api.php"],
-            capture_output=True, text=True, timeout=60,
-        )
-        url = result.stdout.strip()
-        if url.startswith("https://files.catbox.moe/"):
-            return url
-    except Exception:
-        pass
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=360)
+        http = (result.stdout or "").strip()
+        if http.startswith("2"):
+            return f"https://archive.org/download/{ARCHIVE_ITEM}/{remote_name}"
+        log(f"Archive.org returned HTTP {http}: {(result.stderr or '')[:120]}")
+    except Exception as e:
+        log(f"Archive.org upload failed: {e}")
     return None
 
 
@@ -161,7 +177,8 @@ def main():
                 if add_text_overlay(raw_frame, final_thumb, title, date_str):
                     log("  Text overlay added")
 
-                    url = upload_to_catbox(final_thumb)
+                    remote_name = f"{(rec.get('video_id') or 'thumbnail')}.jpg"
+                    url = upload_to_archive(final_thumb, remote_name)
                     if url:
                         rec["custom_thumbnail"] = url
                         updated = True

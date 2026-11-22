@@ -4,7 +4,7 @@
 # ║                                                                              ║
 # ║ Converts MP4 recordings into HLS format (.m3u8 + .ts chunks).                ║
 # ║ Each chunk is tiny (~10s, ~5-15MB) so it can be hosted on ANY free           ║
-# ║ service, even Catbox (200MB limit).                                          ║
+# ║ service, even hosts with a 200MB per-file limit.                             ║
 # ║                                                                              ║
 # ║ Benefits:                                                                    ║
 # ║ • No single service sees the full file or bandwidth                          ║

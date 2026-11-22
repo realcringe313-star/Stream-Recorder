@@ -51,6 +51,9 @@ Operational map for anyone debugging or changing this repo. Read this FIRST.
   removed. GitHub may suspend the whole account for using Actions/Releases as
   permanent media hosting, so do not reintroduce MP4 release uploads.
   `tests/no-github-media-upload-test.sh` is the drift guard.
+- **Catbox is removed completely (2026-11-22).** The owner requested removal.
+  Thumbnail storage uses the shared Archive.org thumbnail item; storyboards
+  already use Archive.org. `tests/no-catbox-test.sh` prevents accidental return.
 - **Archive.org object names are underscore-folded (2026-10-23).** The uploader
   names uploads with `make_safe_filename()` (`upload-clouds.sh`): spaces and
   punctuation become `_`. Any offline derivation of `archive_direct` MUST use
