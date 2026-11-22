@@ -47,6 +47,7 @@ printf '%s' '{"messages":[{"t":2,"a":"Local","m":"Keep new capture"}]}' > "$TMP/
 printf '1' > "$TMP/version"; printf '0' > "$TMP/puts"; : > "$TMP/env"
 RC=0
 PATH="$TMP/bin:$PATH" MOCK_STATE="$TMP" CAS="${CAS:-1}" GH_WRITE_MAX_ATTEMPTS=2 \
+  CATBOX_SKIP=true \
   GH_PAT='<REDACTED>' GITHUB_REPOSITORY='owner/repo' GITHUB_ENV="$TMP/env" \
   STREAM_VIDEO_ID=abcdefghijk RECORD_CHAT_FILE="$TMP/record/chat.json" \
   RECORD_CHAT_URL='' RECORD_CHAT_REPO='' \

@@ -29,11 +29,12 @@ FIX=$(mktemp -d)
 trap 'rm -rf "$FIX"' EXIT
 mkdir -p "$FIX/bin" "$FIX/run"
 
-# curl stub: log every URL, answer 201 so github_api_write reports success.
+# curl stub: Catbox returns a valid direct link; GitHub writes return 201.
 cat > "$FIX/bin/curl" <<EOF
 #!/usr/bin/env bash
 for a in "\$@"; do
   case "\$a" in
+    https://catbox.moe/user/api.php) printf '%s' 'https://files.catbox.moe/testchat.json'; exit 0 ;;
     https://api.github.com/*) echo "\$a" >> "$FIX/curl.log" ;;
   esac
 done
@@ -41,6 +42,7 @@ printf '%s' "201"
 EOF
 chmod +x "$FIX/bin/curl"
 export PATH="$FIX/bin:$PATH"
+export CATBOX_TEST_URL="https://files.catbox.moe/testchat.json"
 
 export GITHUB_REPOSITORY="usermuneeb1/Stream-Recorder"
 export GH_PAT="stub-token"
@@ -76,8 +78,8 @@ grep -q 'contents/data/chat/aE9DKeELxVk.json' "$FIX/curl.log" 2>/dev/null \
     || bad "no write to data/chat/aE9DKeELxVk.json"
 [[ "$(echo "${RECORD_CHAT_REPO:-}")" == "data/chat/aE9DKeELxVk.json" ]] \
     && ok "RECORD_CHAT_REPO recorded" || bad "RECORD_CHAT_REPO = '${RECORD_CHAT_REPO:-}'"
-[[ "${RECORD_CHAT_URL:-}" == *"/main/data/chat/aE9DKeELxVk.json" ]] \
-    && ok "RECORD_CHAT_URL falls back to the repo CDN when archive.org has no copy" \
+[[ "${RECORD_CHAT_URL:-}" == "https://files.catbox.moe/testchat.json" ]] \
+    && ok "RECORD_CHAT_URL is the Catbox primary link" \
     || bad "RECORD_CHAT_URL = '${RECORD_CHAT_URL:-}'"
 
 echo "── an EMPTY replay publishes nothing ──"

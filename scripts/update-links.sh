@@ -302,6 +302,7 @@ update_recordings_json() {
         --arg st0807 "$st0807_link" \
         --arg viking "$vikingfile_link" \
         --arg chat "${RECORD_CHAT_URL:-}" \
+        --arg catboxchat "${RECORD_CHAT_CATBOX:-}" \
         --arg thumb "$thumb_url" \
         --arg rec "$recorded_at" '
         ([ .[] | select(.video_id == $vid) ][0] // {}) as $old
@@ -328,6 +329,7 @@ update_recordings_json() {
             st0807_link: $st0807,
             vikingfile_link: $viking,
             chat_url: $chat,
+            catbox_chat: $catboxchat,
             recorded_at: $rec
           } | with_entries(select(.value != "" and .value != null and .value != 0))) as $new
         | [ ($old * $new) ] + [ .[] | select(.video_id != $vid) ]

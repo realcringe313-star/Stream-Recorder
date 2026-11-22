@@ -95,6 +95,7 @@ env:
   GH_PAT: ${{ secrets.GH_PAT }}
   WARP_LICENSE_KEY: ${{ secrets.WARP_LICENSE_KEY }}
   AVATAR_URL: ${{ secrets.AVATAR_URL }}
+  CATBOX_USERHASH: ${{ secrets.CATBOX_USERHASH }}
   RECORD_DIR: /tmp/stream-recorder
   COOKIES_FILE: cookies.txt
   # Cookie-free public recording is the default. SeleniumBase Pure CDP reads

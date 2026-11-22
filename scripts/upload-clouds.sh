@@ -380,7 +380,7 @@ EOF
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  LIVE CHAT PUBLISHING (repo data/chat + archive.org chat.json)
+#  LIVE CHAT PUBLISHING (Catbox primary + repo data/chat + Archive backup)
 #
 #  The dashboard replays `data/chat/<video_id>.json` from the repo CDN; the
 #  archive.org `chat.json` is the permanent copy that links.txt points at.
@@ -436,8 +436,19 @@ publish_chat_to_repo() {
         return 1
     fi
 
+    # Catbox is the primary chat link. It must be uploaded before advertising
+    # success, and only the compact JSON is sent there.
+    local catbox_url=""
+    if catbox_url=$(bash "$SCRIPT_DIR/catbox/upload_to_catbox.sh" "$f"); then
+        set_env "RECORD_CHAT_CATBOX" "$catbox_url"
+        set_env "RECORD_CHAT_URL" "$catbox_url"
+        log_ok "Chat: uploaded to Catbox → primary chat link"
+    else
+        log_warn "Chat: Catbox upload failed; repo/Archive fallback will be used"
+    fi
+
     # Contents API caps a file at ~100 MB and base64 inflates by 4/3; skip the
-    # repo copy for absurdly long chats, the archive.org copy still stands.
+    # repo copy for absurdly long chats. Catbox remains the primary copy.
     local bytes
     bytes=$(get_file_size "$f")
     if (( bytes > 25000000 )); then
@@ -601,7 +612,11 @@ upload_to_archive() {
                     --upload-file "$chat_file" \
                     "https://s3.us.archive.org/${identifier}/chat.json" 2>/dev/null) || chat_code="000"
                 if [[ "$chat_code" =~ ^2[0-9]{2}$ ]]; then
-                    set_env "RECORD_CHAT_URL" "https://archive.org/download/${identifier}/chat.json"
+                    local archive_chat_url="https://archive.org/download/${identifier}/chat.json"
+                    set_env "RECORD_CHAT_ARCHIVE" "$archive_chat_url"
+                    if [[ -z "${RECORD_CHAT_URL:-}" ]]; then
+                        set_env "RECORD_CHAT_URL" "$archive_chat_url"
+                    fi
                     log_ok "  Archive.org: Chat log uploaded (${chat_msgs} messages)"
                 else
                     log_warn "  Archive.org: Chat upload failed (HTTP ${chat_code}), no link published"
@@ -1274,8 +1289,8 @@ upload_to_clouds() {
 
     log_separator
 
-    # Dashboard thumbnail (cloud URL, not committed to repo)
-    upload_thumbnail_to_cloud || true
+    # Thumbnails are Discord-only by owner policy. The local thumbnail is
+    # attached directly to the Discord webhook and is never uploaded here.
 
     # Live-chat replay → repo data/chat (the dashboard's source). Independent
     # of the archive.org upload above; either copy alone is still useful.

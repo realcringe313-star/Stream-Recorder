@@ -23,6 +23,7 @@ on:
 
 permissions:
   contents: write
+  actions: read
 
 concurrency:
   group: chat-archiver
@@ -37,7 +38,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check whether the recorder produced a recording
+        id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PARENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" != "workflow_run" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual/scheduled scan enabled."
+            exit 0
+          fi
+          RUN_JSON=$(curl -fsS --max-time 30 \
+            -H "Authorization: Bearer ${GH_TOKEN}" \
+            -H "Accept: application/vnd.github+json" \
+            "${GITHUB_API_URL}/repos/${GITHUB_REPOSITORY}/actions/runs/${PARENT_RUN_ID}/jobs") || RUN_JSON=""
+          RECORDED=$(printf '%s' "$RUN_JSON" | jq -r '
+            any(.jobs[]?.steps[]?; .name == "Record stream" and .conclusion == "success")
+          ' 2>/dev/null || echo false)
+          if [[ "$RECORDED" == "true" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Parent recorder produced a recording; chat scan enabled."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Parent recorder did not record; skipping chat scan."
+          fi
+
       - name: Set up tools
+        if: steps.gate.outputs.run == 'true'
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq jq nodejs > /dev/null
           # yt-dlp = primary (live_chat subtitles); chat-downloader = fallback
@@ -51,6 +80,7 @@ jobs:
             || echo "::warning::chat-downloader unavailable, yt-dlp is the only capture path"
 
       - name: Capture missing chats (newest first, privates race the clock)
+        if: steps.gate.outputs.run == 'true'
         run: |
           chmod +x scripts/archive-chat.sh
           mkdir -p data/chat
@@ -82,7 +112,8 @@ jobs:
               missing=$((missing + 1))
               echo "::warning title=Live chat not archived::$vid — no replay available yet ($url)"
             fi
-          done < <(jq -r 'sort_by(.date) | reverse | .[] | "\(.video_id) \(.video_url)"' data/recordings.json)
+          done < <(jq -r 'sort_by(.date) | reverse | .[] | "\(.video_id) \(.video_url)"' data/recordings.json \
+                   | head -n "${CHAT_MAX_ITEMS:-6}")
 
           {
             echo "### 💬 Live chat archive"
@@ -108,14 +139,21 @@ jobs:
             exit 1
           fi
 
+      - name: Publish compact chats to Catbox
+        if: always() && steps.gate.outputs.run == 'true'
+        env:
+          CATBOX_USERHASH: ${{ secrets.CATBOX_USERHASH }}
+        run: python3 scripts/chat/publish-catbox.py
+
       - name: Commit newly archived chats
+        if: always() && steps.gate.outputs.run == 'true'
         run: |
           git config user.name  "chat-archiver[bot]"
           git config user.email "actions@users.noreply.github.com"
-          git add data/chat/ 2>/dev/null || true
+          git add data/chat/ data/recordings.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "no new chats to commit"
           else
-            git commit -m "Archive live chats ($(git diff --cached --name-only | wc -l) files)"
+            git commit -m "Archive live chats and publish Catbox links"
             bash scripts/safe-push.sh
           fi

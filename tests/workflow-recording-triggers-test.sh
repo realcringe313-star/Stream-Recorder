@@ -24,7 +24,7 @@ chain=nw_on.get('workflow_run',{})
 assert 'Stream Recorder' in chain.get('workflows',[]), \
        'night watch must continue from completed Stream Recorder runs'
 
-consumers=['thumbnail-gen','storyboard-gen','telegram-mirror','youtube-ghost-host',
+consumers=['storyboard-gen','telegram-mirror','youtube-ghost-host',
            'chat-archiver','auto-issue']
 missing=[]
 for stem in consumers:
