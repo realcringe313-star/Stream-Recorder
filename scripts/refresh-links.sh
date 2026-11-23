@@ -103,8 +103,8 @@ refresh_gofile() {
             "https://api.gofile.io/contents/${code}?wt=4fd6sg89d7s6" 2>/dev/null && return 0
     fi
 
-    curl -s -o /dev/null --max-time 30 \
-        -r "0-1023" \
+    curl -s -o /dev/null --max-time 60 \
+        -r "0-10485759" \
         -L "$url" 2>/dev/null
 
     return $?
@@ -182,24 +182,25 @@ refresh_pixeldrain() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  0807.ST REFRESH, 1KB range ping. Files auto-delete after ~300 days of NO
-#  ACTIVITY (owner correction 2026-09-02) — this ping IS the keep-alive: it
-#  registers a download and resets the idle timer. Also keeps CDN caches warm.
+#  0807.ST (DROPDRIVE) REFRESH — 10MB range ping. Files delete after ~30 days
+#  of NO ACTIVITY — this ping IS the keep-alive: it downloads a full 10MB chunk
+#  to guarantee active download status and reset the idle timer.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 refresh_st0807() {
     local url="$1"
-    curl -s -o /dev/null --max-time 30 -r "0-1023" -L "$url" 2>/dev/null
+    # Download 10MB (0-10485759) to register real activity
+    curl -s -o /dev/null --max-time 60 -r "0-10485759" -L "$url" 2>/dev/null
     return $?
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  VIKINGFILE REFRESH, check-file + 1KB range ping on the public URL
+#  VIKINGFILE REFRESH — check-file + 10MB range ping on the public URL
 # ═══════════════════════════════════════════════════════════════════════════════
 
 refresh_vikingfile() {
     local url="$1"
-    curl -s -o /dev/null --max-time 30 -r "0-1023" -L "$url" 2>/dev/null
+    curl -s -o /dev/null --max-time 60 -r "0-10485759" -L "$url" 2>/dev/null
     return $?
 }
 
