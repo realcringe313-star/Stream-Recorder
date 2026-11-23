@@ -1,0 +1,194 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║   LIVE RECORD TEST (real recorder, temp storage only, zero repo writes)      ║
+# ║  • runs the REAL install + browser stack + scripts/record-stream.sh cascade  ║
+# ║    against a PUBLIC live stream for N minutes (default 2)                    ║
+# ║  • REAL post-process.sh + upload-clouds.sh → Gofile + VikingFile ONLY        ║
+# ║  • links go ONLY to the Discord recordings channel ([LIVE RECORD TEST])      ║
+# ║  • contents: read → cannot touch recordings.json / dashboard                 ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+name: "Live record test (temp storage)"
+
+on:
+  workflow_dispatch:
+    inputs:
+      stream_url:
+        description: "Public LIVE YouTube URL (channel /live URLs work)"
+        required: false
+        default: "https://www.youtube.com/@SkyNews/live"
+      minutes:
+        description: "Minutes to record"
+        required: false
+        default: "2"
+
+permissions:
+  contents: read
+
+env:
+  DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+  DISCORD_WEBHOOK_RECORDINGS: ${{ secrets.DISCORD_WEBHOOK_RECORDINGS }}
+  AVATAR_URL: ${{ secrets.AVATAR_URL }}
+  WARP_LICENSE_KEY: ${{ secrets.WARP_LICENSE_KEY }}
+  RECORD_DIR: /tmp/stream-recorder
+  COOKIES_FILE: cookies.txt
+  PUBLIC_STREAM_ONLY: "true"
+  BROWSER_MODE: ${{ vars.BROWSER_MODE || 'cdp' }}
+  BROWSER_ASSIST: ${{ vars.BROWSER_ASSIST || 'first' }}
+  BROWSER_SESSION_TIMEOUT: "240"
+  TZ: Asia/Karachi
+
+concurrency:
+  group: live-record-test
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: "Record live → Gofile + VikingFile → Discord"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v7
+      - name: "Install dependencies"
+        # IMPORTANT: do NOT use `set -e` here. The install step has several
+        # best-effort operations (pip installs, /tmp cleanup, root-owned file
+        # removal) and a single benign failure was killing the whole job and
+        # losing a live recording (2026-06-26 incident). Each critical
+        # install below has its own verification fallback.
+        shell: bash {0}
+        run: |
+          set -u   # catch undefined vars, but NOT -e (no abort on cmd failure)
+          set +o pipefail
+          echo "Installing required tools..."
+
+          # Update package list
+          sudo apt-get update -qq || echo "::warning::apt update returned non-zero (continuing)"
+
+          # Install core tools (nodejs is pre-installed on GitHub runners)
+          sudo apt-get install -y -qq ffmpeg jq bc curl python3 megatools
+
+          # Install yt-dlp (nightly build for latest YouTube anti-bot patches)
+          sudo curl -L https://github.com/yt-dlp/yt-dlp-nightly-builds/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp 2>/dev/null || \
+          sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+          sudo chmod a+rx /usr/local/bin/yt-dlp
+
+          # ── NEW: Install ytarchive (purpose-built YouTube live archiver) ──
+          # Independent Go binary; far more robust for live streams than yt-dlp.
+          YTA_VER="0.5.0"
+          sudo curl -L "https://github.com/Kethsar/ytarchive/releases/download/v${YTA_VER}/ytarchive_linux_amd64.zip" -o /tmp/ytarchive.zip
+          sudo unzip -o /tmp/ytarchive.zip -d /usr/local/bin/
+          sudo chmod a+rx /usr/local/bin/ytarchive
+          # NOTE: use sudo + `|| true` because /tmp/ytarchive.zip was created by
+          # `sudo curl` so it's owned by root. A bare `rm -f` from the runner user
+          # would fail with "Operation not permitted" and abort the entire
+          # install step under bash -e (this lost us a recording on 2026-06-26).
+          sudo rm -f /tmp/ytarchive.zip || true
+
+          # Install yt-dlp PO token / nsig challenge solver
+          pip3 install --quiet bgutil-ytdlp-pot-provider 2>/dev/null || true
+
+          # Install streamlink and chat-downloader
+          pip3 install --quiet streamlink chat-downloader
+
+          # Strip Windows CRLF line endings, these corrupt JSON payloads
+          sed -i 's/\r$//' scripts/*.sh scripts/*.env 2>/dev/null || true
+
+          # Make scripts executable
+          chmod +x scripts/*.sh
+
+          # Verify installations
+          echo "──────────────────────────────────────"
+          echo "yt-dlp     version: $(yt-dlp --version 2>&1 || echo 'MISSING')"
+          echo "ytarchive  version: $(ytarchive --version 2>&1 | head -1 || echo 'N/A')"
+          echo "ffmpeg     version: $(ffmpeg -version 2>&1 | head -1 || echo 'MISSING')"
+          echo "streamlink version: $(streamlink --version 2>/dev/null || echo 'N/A')"
+          echo "jq         version: $(jq --version 2>&1 || echo 'MISSING')"
+          echo "node       version: $(node --version 2>/dev/null || echo 'N/A')"
+          echo "──────────────────────────────────────"
+
+          # ── CRITICAL TOOL GATE ──
+          # The recorder MUST have at least one of (yt-dlp | streamlink) and
+          # ffmpeg + jq to function. Fail the workflow ONLY if these are
+          # actually missing. ytarchive is optional (Method H falls back to
+          # Methods I/D/C/G/E/F if missing).
+          MISSING=()
+          command -v ffmpeg >/dev/null || MISSING+=("ffmpeg")
+          command -v jq     >/dev/null || MISSING+=("jq")
+          if ! command -v yt-dlp >/dev/null && ! command -v streamlink >/dev/null; then
+            MISSING+=("yt-dlp OR streamlink")
+          fi
+          if (( ${#MISSING[@]} > 0 )); then
+            echo "::error::Critical tools missing: ${MISSING[*]}"
+            exit 1
+          fi
+          echo "✅ All critical tools present, recording can proceed"
+
+
+
+      - name: "Install browser bypass stack"
+        continue-on-error: true
+        run: bash scripts/setup-browser.sh
+
+      - name: "Setup Cloudflare WARP"
+        continue-on-error: true
+        run: bash scripts/setup-warp.sh
+
+      - name: "Resolve live stream"
+        id: live
+        run: |
+          URL="${{ github.event.inputs.stream_url }}"
+          URL="${URL:-https://www.youtube.com/@SkyNews/live}"
+          VID=$(yt-dlp --no-warnings --skip-download --print "%(id)s" "$URL" 2>/dev/null | head -1 || true)
+          if [[ ! "$VID" =~ ^[A-Za-z0-9_-]{11}$ ]]; then
+            VID=$(curl -fsSL -A "Mozilla/5.0" "$URL" | grep -oE '"videoId":"[A-Za-z0-9_-]{11}"' | head -1 | cut -d'"' -f4 || true)
+          fi
+          [[ "$VID" =~ ^[A-Za-z0-9_-]{11}$ ]] || { echo "::error::could not resolve a live video id from $URL"; exit 1; }
+          echo "Live video: $VID"
+          {
+            echo "STREAM_VIDEO_ID=$VID"
+            echo "STREAM_URL=https://www.youtube.com/watch?v=$VID"
+            echo "STREAM_TITLE=[LIVE RECORD TEST] temp storage only, NOT an archive entry"
+          } >> "$GITHUB_ENV"
+
+      - name: "Record (REAL scripts/record-stream.sh cascade)"
+        id: record
+        timeout-minutes: 30
+        run: |
+          MIN="${{ github.event.inputs.minutes }}"; [[ "$MIN" =~ ^[0-9]+$ ]] || MIN=2
+          export MAX_RECORD_DURATION=$(( MIN * 60 ))
+          export CUSTOM_DURATION_MODE=true
+          export MAX_RECORD_ATTEMPTS=1
+          bash scripts/record-stream.sh
+          echo "--- method failures (if any) ---"
+          cat /tmp/stream-recorder/method_logs/failures.log 2>/dev/null | grep -E '====|Status' || true
+
+      - name: "Post-process"
+        id: process
+        if: steps.record.outputs.recording_success == 'true'
+        run: SAVE_THUMBNAIL=false bash scripts/post-process.sh
+
+      - name: "Upload (Gofile + VikingFile ONLY)"
+        if: steps.process.outcome == 'success'
+        run: |
+          export GOFILE_SKIP=false VIKINGFILE_SKIP=false
+          export MEGA_SKIP=true PIXELDRAIN_SKIP=true ARCHIVE_SKIP=true ST0807_SKIP=true DROPDRIVE_SKIP=true
+          export TELEGRAM_SKIP=true YOUTUBE_SKIP=true
+          unset ARCHIVE_ACCESS_KEY MEGA_EMAIL
+          bash scripts/upload-clouds.sh
+
+      - name: "Discord notification"
+        if: steps.process.outcome == 'success'
+        run: |
+          source scripts/utils.sh
+          source scripts/discord-notify.sh
+          notify_recording_complete
+
+      - name: "Verdict"
+        if: always()
+        run: |
+          if [[ "${{ steps.record.outputs.recording_success }}" == "true" ]]; then
+            echo "✅ LIVE RECORDING WORKS on GitHub runners" | tee -a "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ LIVE RECORDING FAILED — see 'method failures' in the Record step" | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          rm -rf /tmp/stream-recorder

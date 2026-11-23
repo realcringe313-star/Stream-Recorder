@@ -42,7 +42,7 @@ doc = yaml.safe_load(open(wf, encoding="utf-8"))
 step = None
 for job in doc["jobs"].values():
     for s in job.get("steps") or []:
-        if s.get("name") == "Alert + trigger repair if degraded":
+        if s.get("name") in ("Alert + trigger repair if degraded", "Trigger silent auto-repair if degraded"):
             step = s
 if step is None:
     sys.exit("step 'Alert + trigger repair if degraded' not found in mirror-health.yml — rename the test if you renamed the step")
@@ -80,7 +80,7 @@ echo "$OUT" | sed 's/^/     /'
 [[ $RC -eq 0 ]] && ok "step exit 0" || bad "step exit $RC (incident: jq compile error, exit 3)"
 grep -q 'DEADDEAD001' "$FIX/summary.md" 2>/dev/null && ok "unhealthy row listed in step summary" || bad "unhealthy row missing from summary"
 grep -q 'OKOKOKOKOK1' "$FIX/summary.md" 2>/dev/null && bad "healthy row leaked into summary" || ok "healthy row not listed"
-grep -q 'discord.invalid' "$FIX/curl.log" 2>/dev/null && ok "Discord webhook POSTed" || bad "Discord alert never sent"
+grep -q 'discord.invalid' "$FIX/curl.log" 2>/dev/null && bad "Discord alert sent (repair is silent by owner choice)" || ok "silent: no Discord alert"
 grep -q 'repair-mirrors.yml/dispatches' "$FIX/curl.log" 2>/dev/null && ok "repair-mirrors dispatch POSTed" || bad "repair-mirrors never dispatched"
 
 echo

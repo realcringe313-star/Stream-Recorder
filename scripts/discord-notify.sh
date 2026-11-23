@@ -154,8 +154,8 @@ ALERT_WINDOW_SEC=86400
 _alert_should_send() {
     local channel_type="$1"
     local payload="$2"
-    local -n _digest_note=$3
-    _digest_note=""
+    local -n __ads_note_ref=$3
+    __ads_note_ref=""
 
     # Fail-open guards
     command -v jq >/dev/null 2>&1 || return 0
@@ -187,7 +187,7 @@ _alert_should_send() {
     else
         decision="suppress"
         (( ++suppressed ))
-        _digest_note="🔇 ${suppressed} repeat alert(s) suppressed in the last 24h (same title)"
+        __ads_note_ref="🔇 ${suppressed} repeat alert(s) suppressed in the last 24h (same title)"
     fi
 
     new_state=$(echo "$state" | jq -c \
