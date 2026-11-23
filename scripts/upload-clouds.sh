@@ -125,10 +125,10 @@ upload_to_gofile() {
 
         log_debug "  Gofile attempt ${attempt}/${max_retries} on ${endpoint}"
 
-        upload_response=$(curl -s --max-time "${UPLOAD_TIMEOUT:-3600}" \
+        upload_response=$(curl -sS --max-time "${UPLOAD_TIMEOUT:-3600}" \
             -H "Authorization: Bearer ${token}" \
             -F "file=@${file}" \
-            "$endpoint" 2>/dev/null) || true
+            "$endpoint" 2>&1) || true
 
         local upload_elapsed=$(( $(now_epoch) - upload_start ))
 
@@ -1123,6 +1123,18 @@ upload_to_clouds() {
     log_header "MULTI-CLOUD REDUNDANCY UPLOAD"
 
     UPLOAD_START_TIME=$(now_epoch)
+
+    # WARP is only needed to get past YouTube. Upload hosts (Gofile proven
+    # 2026-11-23) reject or drop Cloudflare WARP egress, so leave the tunnel
+    # before uploading. UPLOAD_VIA_WARP=true keeps it up.
+    if [[ "${UPLOAD_VIA_WARP:-false}" != "true" ]] && command -v warp-cli >/dev/null 2>&1; then
+        if warp-cli --accept-tos status 2>/dev/null | grep -qi 'connected' \
+           && ! warp-cli --accept-tos status 2>/dev/null | grep -qi 'disconnected'; then
+            warp-cli --accept-tos disconnect >/dev/null 2>&1 || true
+            sleep 2
+            log_info "WARP disconnected for uploads (direct runner IP: $(curl -4 -s --max-time 10 https://api.ipify.org 2>/dev/null || echo '?'))"
+        fi
+    fi
 
     local files_list="${PROCESSED_FILES_LIST:-}"
     if [[ -z "$files_list" ]]; then
