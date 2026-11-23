@@ -154,6 +154,23 @@ jobs:
             echo "STREAM_TITLE=[LIVE RECORD TEST] temp storage only, NOT an archive entry"
           } >> "$GITHUB_ENV"
 
+      - name: "Network diagnostic (IPv4 vs IPv6 egress)"
+        continue-on-error: true
+        run: |
+          echo "IPv4 egress: $(curl -4 -s --max-time 10 https://api.ipify.org || echo none)"
+          echo "IPv6 egress: $(curl -6 -s --max-time 10 https://api64.ipify.org || echo none)"
+          for fam in 4 6; do
+            M=$(timeout 60 yt-dlp -$fam --no-warnings --extractor-args "youtube:player_client=android_vr" -g "$STREAM_URL" 2>&1 | grep -m1 '^https' || true)
+            [[ -z "$M" ]] && { echo "IPv$fam: no manifest"; continue; }
+            ipq=$(grep -oE '/ip/[^/]+' <<<"$M" | head -1)
+            echo "IPv$fam manifest bound to: ${ipq:-?}"
+            for f2 in 4 6; do
+              code=$(curl -$f2 -s -o /tmp/m.txt -w '%{http_code}' --max-time 20 "$M" || echo ERR)
+              seg=$(grep -m1 '^https' /tmp/m.txt 2>/dev/null || true)
+              scode=-; [[ -n "$seg" ]] && scode=$(curl -$f2 -s -o /dev/null -w '%{http_code}' --max-time 20 "$seg" || echo ERR)
+              echo "  fetch via IPv$f2: manifest=$code segment=$scode"
+            done
+          done
       - name: "Record (REAL scripts/record-stream.sh cascade)"
         id: record
         timeout-minutes: 30
