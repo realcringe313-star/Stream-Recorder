@@ -180,10 +180,33 @@ setup_warp() {
   log_info " License : ${warp_license:+WARP+}${warp_license:-Free}"
   log_separator
 
+  # ── IPv4 pin (2026-11-23) ─────────────────────────────────────────────
+  # Proven on a live run: through WARP, googlevideo serves IPv4-bound
+  # manifests+segments (200) but 403s IPv6-bound segments. yt-dlp, ffmpeg,
+  # streamlink and Chrome all preferred IPv6, so EVERY method (incl. CDP
+  # Method K) got a playable manifest and then 403 on media. Pin the runner
+  # to IPv4 while WARP is up. Set WARP_IPV4_ONLY=false to disable.
+  if [[ "${WARP_IPV4_ONLY:-true}" == "true" ]]; then
+    local v4
+    v4=$(curl -4 -s --max-time 10 https://api.ipify.org 2>/dev/null || true)
+    if [[ -n "$v4" ]]; then
+      echo 'precedence ::ffff:0:0/96  100' | sudo tee /etc/gai.conf >/dev/null 2>&1 || true
+      sudo sysctl -qw net.ipv6.conf.all.disable_ipv6=1 net.ipv6.conf.default.disable_ipv6=1 2>/dev/null || true
+      if curl -4 -s --max-time 10 https://www.youtube.com/generate_204 -o /dev/null; then
+        log_ok "IPv4 pinned for media (WARP IPv4 egress: ${v4})"
+        set_env "WARP_IP" "$v4"
+      else
+        log_warn "IPv4 check failed after pin, restoring IPv6"
+        sudo sysctl -qw net.ipv6.conf.all.disable_ipv6=0 net.ipv6.conf.default.disable_ipv6=0 2>/dev/null || true
+      fi
+    else
+      log_warn "No WARP IPv4 egress, leaving IPv6 enabled"
+    fi
+  fi
+
   set_env "WARP_CONNECTED" "true"
   return 0
 }
-
 # Fallback only used when this script is called directly (not from workflow).
 _warp_fallback() {
   log_warn "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
