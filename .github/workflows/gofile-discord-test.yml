@@ -108,6 +108,9 @@ jobs:
           export MEGA_SKIP=true
           export PIXELDRAIN_SKIP=true
           export ARCHIVE_SKIP=true
+          export ST0807_SKIP=true
+          export DROPDRIVE_SKIP=true
+          export VIKINGFILE_SKIP=false
           bash scripts/upload-clouds.sh
           echo "---"
           echo "UPLOAD_SUCCESS_COUNT=${UPLOAD_SUCCESS_COUNT:-0}"
