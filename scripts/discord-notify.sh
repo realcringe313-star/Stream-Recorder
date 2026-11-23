@@ -88,7 +88,7 @@ send_discord_webhook() {
         http_code=$(curl -s -o "$out_tmp" -w '%{http_code}' \
             --max-time 30 \
             -F "payload_json=<${payload_tmp}" \
-            -F "files[0]=@${thumb_file};filename=thumbnail.jpg;type=image/jpeg" \
+            -F "files[0]=@\"${thumb_file}\";filename=thumbnail.jpg;type=image/jpeg" \
             "$req_url" 2>/dev/null)
     else
         http_code=$(curl -s -o "$out_tmp" -w '%{http_code}' \

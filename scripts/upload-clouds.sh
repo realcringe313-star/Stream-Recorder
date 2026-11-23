@@ -127,7 +127,7 @@ upload_to_gofile() {
 
         upload_response=$(curl -sS --max-time "${UPLOAD_TIMEOUT:-3600}" \
             -H "Authorization: Bearer ${token}" \
-            -F "file=@${file}" \
+            -F "file=@\"${file}\"" \
             "$endpoint" 2>&1) || true
 
         local upload_elapsed=$(( $(now_epoch) - upload_start ))
@@ -217,7 +217,7 @@ upload_to_pixeldrain() {
             # POST returns: {"success":true,"id":"abc123"} on HTTP 200
             upload_response=$(curl -s \
                 --max-time "${UPLOAD_TIMEOUT:-3600}" \
-                -F "file=@${file};filename=${display_filename}" \
+                -F "file=@\"${file}\";filename=\"${display_filename//\"/}\"" \
                 -w $'\n%{http_code}' \
                 "https://pixeldrain.com/api/file" \
                 2>/dev/null) || true
@@ -964,7 +964,7 @@ _vikingfile_legacy() {
     [[ -z "$server" ]] && server="https://upload.vikingfile.com"
     local resp url
     resp=$(curl -s --max-time "${UPLOAD_TIMEOUT:-3600}" \
-        -F "file=@${file};filename=${name}" \
+        -F "file=@\"${file}\";filename=\"${name//\"/}\"" \
         -F "user=${user}" \
         "$server" 2>/dev/null) || return 1
     url=$(echo "$resp" | jq -r '.url // empty' 2>/dev/null)
@@ -1078,7 +1078,7 @@ upload_thumbnail_to_cloud() {
         if [[ -n "$gf_token" ]]; then
             gf_response=$(curl -s --max-time 120 \
                 -H "Authorization: Bearer ${gf_token}" \
-                -F "file=@${thumb_file}" \
+                -F "file=@\"${thumb_file}\"" \
                 "https://upload.gofile.io/uploadfile" 2>/dev/null) || true
             gf_page=$(echo "$gf_response" | jq -r '.data.downloadPage // empty' 2>/dev/null)
             if [[ -n "$gf_page" ]]; then
@@ -1096,7 +1096,7 @@ upload_thumbnail_to_cloud() {
         local upload_response http_code json_body file_id
         upload_response=$(curl -s --max-time 120 \
             ${api_key:+-H "Authorization: Bearer ${api_key}"} \
-            -F "file=@${thumb_file};filename=stream_thumbnail.jpg" \
+            -F "file=@\"${thumb_file}\";filename=stream_thumbnail.jpg" \
             -w $'\n%{http_code}' \
             "https://pixeldrain.com/api/file" 2>/dev/null) || true
         http_code=$(echo "$upload_response" | tail -1)
