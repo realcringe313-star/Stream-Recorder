@@ -874,7 +874,8 @@ _record_k_continuous() {
             break
         fi
         log_info "  Method K: stream dropped, reconnecting with a fresh browser manifest..."
-        browser_mint_session "$video_url" >/dev/null 2>&1 || (( ++fails ))
+        # Force a brand-new browser capture: the cached manifest is the one that just died.
+        BROWSER_SESSION_MAX_AGE=0 browser_mint_session "$video_url" >/dev/null 2>&1 || (( ++fails ))
     done
     (( ${#parts[@]} == 0 )) && { rm -rf "$parts_dir"; return 1; }
     if (( ${#parts[@]} == 1 )); then
