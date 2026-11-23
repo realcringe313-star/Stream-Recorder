@@ -823,7 +823,7 @@ _record_browser_manifests() {
         # In-page app-client manifests must be fetched with that app's UA.
         local hls_ua
         hls_ua=$(browser_session_jq hls_user_agent)
-        _record_from_manifest "HLS manifest" "$output_file" "${hls_ua:-$ua}" single -i "$hls" && return 0
+        _record_from_manifest "HLS manifest" "$output_file" "${hls_ua:-$ua}" single -seg_max_retry 10 -m3u8_hold_counters 20 -i "$hls" && return 0
     fi
     if [[ -n "$dash" ]]; then
         _record_from_manifest "DASH manifest" "$output_file" "$ua" single -i "$dash" && return 0
@@ -836,6 +836,60 @@ _record_browser_manifests() {
     fi
     # A video-only adaptive stream is not a successful recording.
     return 1
+}
+
+# Continuous Method K (2026-11-23). Through WARP, googlevideo drops a live
+# HLS session after ~40-90s (segments start 403ing as the WARP egress IP
+# shifts), and ffmpeg then exits "successfully" with a short file. The outer
+# loop only allows MAX_RECORD_ATTEMPTS with a 60s+ cooldown, so a 2h stream
+# would be mostly lost. Here we keep re-capturing a fresh in-page manifest and
+# recording the next part until the time budget is used or the stream ends,
+# then stitch the parts with a lossless concat.
+_record_k_continuous() {
+    local output_file="$1" ua="$2" video_url="$3" vid="$4"
+    local budget="${MAX_RECORD_DURATION:-18000}"
+    local deadline=$(( $(date +%s) + budget ))
+    local parts_dir="${output_file%.*}_kparts"
+    mkdir -p "$parts_dir"
+    local -a parts=()
+    local n=0 fails=0 remaining part
+    while :; do
+        remaining=$(( deadline - $(date +%s) ))
+        (( remaining < 20 )) && break
+        part="${parts_dir}/part_$(printf '%03d' "$n").mp4"
+        ( export MAX_RECORD_DURATION="$remaining"; _record_browser_manifests "$part" "$ua" ) || true
+        if is_valid_video "$part" 51200; then
+            parts+=("$part"); fails=0
+            log_info "  Method K: part $((n + 1)) saved ($(format_size "$(get_file_size "$part")"))"
+        else
+            rm -f "$part"; (( ++fails ))
+        fi
+        (( ++n ))
+        remaining=$(( deadline - $(date +%s) ))
+        (( remaining < 20 )) && break
+        (( fails >= 3 )) && { log_warn "  Method K: 3 empty reconnects in a row, stopping"; break; }
+        if ! is_stream_still_live "$vid" && ! is_stream_still_live "$vid"; then
+            log_info "  Method K: stream no longer live, finishing"
+            break
+        fi
+        log_info "  Method K: stream dropped, reconnecting with a fresh browser manifest..."
+        browser_mint_session "$video_url" >/dev/null 2>&1 || (( ++fails ))
+    done
+    (( ${#parts[@]} == 0 )) && { rm -rf "$parts_dir"; return 1; }
+    if (( ${#parts[@]} == 1 )); then
+        mv -f "${parts[0]}" "$output_file"
+    else
+        local list="${parts_dir}/list.txt"; : > "$list"
+        local p; for p in "${parts[@]}"; do printf "file '%s'\n" "$p" >> "$list"; done
+        if ! ffmpeg -y -nostdin -loglevel error -f concat -safe 0 -i "$list" -c copy \
+                -movflags +faststart "$output_file"; then
+            log_warn "  Method K: concat failed, keeping the longest part"
+            mv -f "$(ls -S "${parts[@]}" | head -1)" "$output_file"
+        fi
+        log_ok "  Method K: stitched ${#parts[@]} parts into one recording"
+    fi
+    rm -rf "$parts_dir"
+    return 0
 }
 
 record_method_k() {
@@ -868,7 +922,7 @@ record_method_k() {
     if [[ "$(browser_mode)" == "cdp" ]]; then
         # Pure CDP path: browser -> player URL -> ffmpeg. No yt-dlp extraction,
         # no --cookies, no --http-cookie-file, and no persistent browser profile.
-        if _record_browser_manifests "$output_file" "$ua"; then
+        if _record_k_continuous "$output_file" "$ua" "$video_url" "$vid"; then
             return 0
         fi
         log_warn "  Method K: CDP capture had no playable video+audio/manifest path"
