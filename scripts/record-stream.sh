@@ -820,7 +820,10 @@ _record_browser_manifests() {
     aurl=$(browser_session_jq audio_url)
     muxed=$(browser_session_jq muxed_url)
     if [[ -n "$hls" ]]; then
-        _record_from_manifest "HLS manifest" "$output_file" "$ua" single -i "$hls" && return 0
+        # In-page app-client manifests must be fetched with that app's UA.
+        local hls_ua
+        hls_ua=$(browser_session_jq hls_user_agent)
+        _record_from_manifest "HLS manifest" "$output_file" "${hls_ua:-$ua}" single -i "$hls" && return 0
     fi
     if [[ -n "$dash" ]]; then
         _record_from_manifest "DASH manifest" "$output_file" "$ua" single -i "$dash" && return 0

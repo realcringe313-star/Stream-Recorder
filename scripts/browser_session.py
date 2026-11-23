@@ -439,6 +439,13 @@ _CDP_HLS_CLIENTS = [
 ]
 
 
+_CDP_HLS_UA = {
+    "ANDROID_VR": "com.google.android.apps.youtube.vr.oculus/1.65.10 (Linux; U; Android 12L; eureka-user Build/SQ3A.220605.009.A1) gzip",
+    "IOS": "com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3_2 like Mac OS X;)",
+    "TVHTML5": "Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version",
+}
+
+
 def _cdp_inpage_hls(sb, video_id: str, timeout: float = 20.0) -> tuple[str, str]:
     """Ask InnerTube from inside the page for a live HLS manifest. Returns (url, client)."""
     if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or ""):
@@ -600,6 +607,8 @@ def capture_cdp_session(url: str, outdir: str, headed: bool = False,
             if hls and valid_media_url(hls, allow_local):
                 facts["hls_manifest_url"] = hls
                 stream["hls_client"] = client
+                # googlevideo checks the UA against the client the URL was issued to.
+                stream["hls_user_agent"] = _CDP_HLS_UA.get(client, "")
                 log(f"  in-page live HLS manifest via {client} client")
             else:
                 log("  in-page live HLS manifest: none returned")
