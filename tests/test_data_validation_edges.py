@@ -67,6 +67,7 @@ class DataValidationEdges(unittest.TestCase):
         self.assertEqual(result.returncode, 0,
                          'the importer supports archive-only ids but the public gate rejects them')
 
+    @unittest.skipUnless((Path(__file__).resolve().parents[1] / "dashboard").is_dir(), "dashboard/ is deployed from a separate repo")
     def test_both_feed_generators_keep_archive_only_recordings(self):
         row = {**self.rec, 'video_id': 'archive-personal-backup-001', 'video_url': '',
                'archive_direct': 'https://archive.org/download/personal-backup-001/video.mp4'}
