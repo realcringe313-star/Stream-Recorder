@@ -855,7 +855,8 @@ _record_k_continuous() {
     local n=0 fails=0 remaining part
     while :; do
         remaining=$(( deadline - $(date +%s) ))
-        (( remaining < 20 )) && break
+        (( n > 0 && remaining < 20 )) && break
+        (( remaining < 1 )) && remaining=1
         part="${parts_dir}/part_$(printf '%03d' "$n").mp4"
         ( export MAX_RECORD_DURATION="$remaining"; _record_browser_manifests "$part" "$ua" ) || true
         if is_valid_video "$part" 51200; then
