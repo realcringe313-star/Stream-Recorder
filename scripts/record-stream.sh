@@ -656,11 +656,11 @@ record_method_i() {
     timeout "${MAX_RECORD_DURATION:-18000}" streamlink \
         "${cookies_args[@]}" \
         $restart_flag \
-        --hls-segment-threads 4 \
+        --stream-segment-threads 4 \
         --hls-playlist-reload-attempts 10 \
         --hls-playlist-reload-time 2 \
-        --hls-segment-attempts 10 \
-        --hls-segment-timeout 30 \
+        --stream-segment-attempts 10 \
+        --stream-segment-timeout 30 \
         --retry-streams 5 \
         --retry-max 10 \
         --retry-open 3 \
