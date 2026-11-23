@@ -422,6 +422,72 @@ def _cdp_accept_consent(sb) -> None:
     })()""")
 
 
+# In-page InnerTube clients that still return a live hlsManifestUrl. The
+# desktop web player stopped exposing hlsManifestUrl for live (SABR), and its
+# adaptive URLs are bound to the player's JS (n/pot) → ffmpeg gets 403
+# (proven on GitHub runners 2026-11-23). The browser itself asks the same
+# youtube.com origin for an app-client manifest: same IP, same anonymous
+# guest session, still no cookie export.
+_CDP_HLS_CLIENTS = [
+    {"clientName": "ANDROID_VR", "clientVersion": "1.65.10", "deviceMake": "Oculus",
+     "deviceModel": "Quest 3", "androidSdkVersion": 32, "osName": "Android",
+     "osVersion": "12L", "hl": "en", "gl": "US"},
+    {"clientName": "IOS", "clientVersion": "20.10.4", "deviceMake": "Apple",
+     "deviceModel": "iPhone16,2", "osName": "iPhone", "osVersion": "18.3.2.22D82",
+     "hl": "en", "gl": "US"},
+    {"clientName": "TVHTML5", "clientVersion": "7.20250923.13.00", "hl": "en", "gl": "US"},
+]
+
+
+def _cdp_inpage_hls(sb, video_id: str, timeout: float = 20.0) -> tuple[str, str]:
+    """Ask InnerTube from inside the page for a live HLS manifest. Returns (url, client)."""
+    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id or ""):
+        return "", ""
+    kick = """(() => {
+      window.__srHls = null; window.__srHlsClient = '';
+      const vid = %s, clients = %s;
+      let vd = '';
+      try { vd = ytcfg.get('VISITOR_DATA') || ''; } catch (e) {}
+      (async () => {
+        for (const c of clients) {
+          try {
+            const r = await fetch('/youtubei/v1/player?prettyPrint=false', {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json', 'X-Goog-Visitor-Id': vd},
+              body: JSON.stringify({videoId: vid, context: {client: Object.assign({visitorData: vd}, c)},
+                                    contentCheckOk: true, racyCheckOk: true})
+            });
+            const j = await r.json();
+            const u = j && j.streamingData && j.streamingData.hlsManifestUrl;
+            if (u) { window.__srHls = u; window.__srHlsClient = c.clientName; return; }
+          } catch (e) {}
+        }
+        window.__srHls = '';
+      })();
+      return true;
+    })()""" % (json.dumps(video_id), json.dumps(_CDP_HLS_CLIENTS))
+    try:
+        sb.evaluate(kick)
+    except Exception as exc:
+        log(f"  in-page HLS request failed to start: {type(exc).__name__}")
+        return "", ""
+    end = time.monotonic() + timeout
+    while time.monotonic() < end:
+        try:
+            val = sb.evaluate("window.__srHls")
+        except Exception:
+            val = None
+        if val is not None and val != "null":
+            client = ""
+            try:
+                client = sb.evaluate("window.__srHlsClient") or ""
+            except Exception:
+                pass
+            return (val or ""), client
+        time.sleep(0.5)
+    return "", ""
+
+
 def capture_cdp_session(url: str, outdir: str, headed: bool = False,
                         max_wait: int = 60, max_height: int = 1080,
                         binary: str = "", cdp_host: str = "", cdp_port: int = 0,
@@ -524,6 +590,19 @@ def capture_cdp_session(url: str, outdir: str, headed: bool = False,
         except Exception:
             pass
         facts = summarize_player(player, max_height=max_height)
+        if (facts.get("playability") == "OK" and facts.get("is_live")
+                and not facts.get("hls_manifest_url") and not allow_local):
+            vid_guess = facts.get("video_id") or ""
+            if not vid_guess:
+                m = re.search(r"(?:v=|youtu\.be/|/live/)([A-Za-z0-9_-]{11})", url)
+                vid_guess = m.group(1) if m else ""
+            hls, client = _cdp_inpage_hls(sb, vid_guess)
+            if hls and valid_media_url(hls, allow_local):
+                facts["hls_manifest_url"] = hls
+                stream["hls_client"] = client
+                log(f"  in-page live HLS manifest via {client} client")
+            else:
+                log("  in-page live HLS manifest: none returned")
         try:
             text = sb.get_text("body") or ""
         except Exception:

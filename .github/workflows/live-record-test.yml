@@ -31,6 +31,8 @@ env:
   DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
   DISCORD_WEBHOOK_RECORDINGS: ${{ secrets.DISCORD_WEBHOOK_RECORDINGS }}
   AVATAR_URL: ${{ secrets.AVATAR_URL }}
+  DROPDRIVE_TOKEN: ${{ secrets.DROPDRIVE_TOKEN || secrets.ST0807_TOKEN }}
+  ST0807_TOKEN: ${{ secrets.DROPDRIVE_TOKEN || secrets.ST0807_TOKEN }}
   WARP_LICENSE_KEY: ${{ secrets.WARP_LICENSE_KEY }}
   RECORD_DIR: /tmp/stream-recorder
   COOKIES_FILE: cookies.txt
@@ -188,11 +190,11 @@ jobs:
         if: steps.record.outputs.recording_success == 'true'
         run: SAVE_THUMBNAIL=false bash scripts/post-process.sh
 
-      - name: "Upload (Gofile + VikingFile ONLY)"
+      - name: "Upload (Gofile + VikingFile + DropDrive ONLY)"
         if: steps.process.outcome == 'success'
         run: |
-          export GOFILE_SKIP=false VIKINGFILE_SKIP=false
-          export MEGA_SKIP=true PIXELDRAIN_SKIP=true ARCHIVE_SKIP=true ST0807_SKIP=true DROPDRIVE_SKIP=true
+          export GOFILE_SKIP=false VIKINGFILE_SKIP=false DROPDRIVE_SKIP=false ST0807_SKIP=false
+          export MEGA_SKIP=true PIXELDRAIN_SKIP=true ARCHIVE_SKIP=true
           export TELEGRAM_SKIP=true YOUTUBE_SKIP=true
           unset ARCHIVE_ACCESS_KEY MEGA_EMAIL
           bash scripts/upload-clouds.sh
