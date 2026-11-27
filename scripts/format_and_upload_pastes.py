@@ -17,7 +17,7 @@ def generate_catalog():
     
     md_lines.append("# The Muslim Lantern — Live Stream Archive Index")
     md_lines.append(f"**Total Recordings:** {len(recs)}  ")
-    md_lines.append(f"**Archive Status:** Multi-Cloud Mirror Network (Telegram, Archive.org, Pixeldrain, Mega, DropDrive, YouTube Unlisted)  \n")
+    md_lines.append(f"**Archive Status:** Multi-Cloud Mirror Network (Telegram, Archive.org, Gofile, Pixeldrain, Mega, DropDrive, YouTube Unlisted)  \n")
     md_lines.append("---\n")
     
     for i, r in enumerate(recs, 1):
@@ -48,6 +48,8 @@ def generate_catalog():
         if r.get("st0807_link"):
             name = "DropDrive CDN" if "dropdrive" in r.get("st0807_link") else "0807 CDN"
             md_lines.append(f"- **{name}:** {r.get('st0807_link')}")
+        if r.get("gofile_link"):
+            md_lines.append(f"- **Gofile:** {r.get('gofile_link')}")
         md_lines.append("\n---\n")
 
     return "\n".join(md_lines)

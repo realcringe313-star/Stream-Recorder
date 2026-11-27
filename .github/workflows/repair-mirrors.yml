@@ -108,7 +108,9 @@ jobs:
         if: always()
         env:
           PASTEBIN_API_KEY: ${{ secrets.PASTEBIN_API_KEY }}
-        run: python3 scripts/format_and_upload_pastes.py || true
+        run: |
+          git pull --rebase origin main || true
+          python3 scripts/format_and_upload_pastes.py || true
 
       - name: "Summary"
         if: always()
