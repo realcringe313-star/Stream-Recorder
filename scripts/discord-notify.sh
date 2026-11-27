@@ -914,10 +914,10 @@ notify_links_refreshed() {
                 title:       "Download Link Health Check",
                 description: (
                     "Periodic link refresh complete. All download links have been pinged to prevent expiry.\n\n" +
-                    "> **Gofile**, Expires after 10 days of inactivity\n" +
-                    "> **Pixeldrain**, Expires after 60 days of inactivity\n" +
-                    "> **0807.st**, expiry=0 (never auto-delete) + keep-alive ping\n" +
-                    "> **VikingFile**, check-file + keep-alive ping\n" +
+                    "> **Gofile**, Expires after 10 days of inactivity (10 MB real download ping every 5 days)\n" +
+                    "> **Pixeldrain**, Expires after 60 days of inactivity (10% download monthly)\n" +
+                    "> **DropDrive (0807.st)**, Expires after ~30 days of inactivity (auto-repaired if expired)\n" +
+                    "> **VikingFile**, check-file verified + auto-repaired if expired\n" +
                     "> **Archive.org**, Permanently safely archived"
                 ),
                 color: 5763757,

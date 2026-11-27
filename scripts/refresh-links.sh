@@ -42,32 +42,30 @@ check_link_alive() {
         case "$vf_exist" in
             alive) return 0 ;;
             dead)  log_debug "    VikingFile API says dead"; return 1 ;;
-            *)     log_debug "    VikingFile check unverifiable, not marking dead"; return 0 ;;
+            *)     log_debug "    VikingFile check unverifiable, not marking dead"; return 2 ;;
         esac
     fi
 
     # Gofile: /d/<code> returns HTTP 200 with the SPA shell even for deleted
-    # folders — the page proves NOTHING. The Contents API with the PUBLIC
-    # website token (no account key, by policy 2026-09-02) is the only reliable
-    # signal. error-notFound → dead; error-token/network → page-content
-    # heuristic (same rule as repair-mirrors _is_gofile_alive): only explicit
-    # dead markers count, because a bare page-200 must never mean "alive".
+    # folders — never fall back to curling HTML. Query the authenticated
+    # Contents API via utils.sh (guest token + dynamic X-Website-Token).
     if [[ "$url" =~ gofile\.io/d/([a-zA-Z0-9_-]+) ]]; then
-        local gf_code="${BASH_REMATCH[1]}"
-        local gf_status
-        gf_status=$(curl -s --max-time "$timeout" \
-            "https://api.gofile.io/contents/${gf_code}?wt=4fd6sg89d7s6" 2>/dev/null | jq -r '.status // "error"' 2>/dev/null)
-        case "$gf_status" in
-            ok) return 0 ;;
-            *notFound*|*notfound*) log_debug "    Gofile API says dead: $gf_status"; return 1 ;;
-            *)
-                local gf_page
-                gf_page=$(curl -sL --max-time "$timeout" "$url" 2>/dev/null) || return 1
-                if echo "$gf_page" | grep -qiE "not found|file.*(removed|expired|deleted)|contentnotfound|page not found|file was deleted"; then
-                    log_debug "    Gofile page says dead"; return 1
-                fi
-                return 0
-                ;;
+        local gf_state
+        gf_state=$(gofile_check_state "$url" "$timeout")
+        case "$gf_state" in
+            alive) return 0 ;;
+            dead)  log_debug "    Gofile API says dead"; return 1 ;;
+            *)     log_debug "    Gofile API unverifiable, not marking alive or dead"; return 2 ;;
+        esac
+    fi
+
+    if [[ "$url" == *dropdrive.rip* || "$url" == *0807.st* ]]; then
+        local dd_state
+        dd_state=$(dropdrive_check_state "$url" "$timeout")
+        case "$dd_state" in
+            alive) return 0 ;;
+            dead)  log_debug "    DropDrive/0807 check says dead"; return 1 ;;
+            *)     log_debug "    DropDrive/0807 check unverifiable"; return 2 ;;
         esac
     fi
     
@@ -86,28 +84,60 @@ check_link_alive() {
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  GOFILE REFRESH, Download 1KB to reset expiration timer
+#  GOFILE REFRESH, Download 10MB from direct file endpoint to reset 10-day TTL
 # ═══════════════════════════════════════════════════════════════════════════════
 
 refresh_gofile() {
     local url="$1"
-    local code=""
-    [[ "$url" =~ gofile\.io/d/([a-zA-Z0-9_-]+) ]] && code="${BASH_REMATCH[1]}"
+    local code
+    code=$(gofile_code_from_url "$url")
+    [[ -z "$code" ]] && return 1
 
-    # Best-effort keep-alive WITHOUT an account API key (policy 2026-09-02):
-    # hit the public Contents endpoint — real content access, unlike the bare
-    # /d/ page which only downloads the SPA shell (the old "refresh" was
-    # phantom and let every link expire). Falls back to the page ping.
-    if [[ -n "$code" ]]; then
-        curl -sf -o /dev/null --max-time 30 \
-            "https://api.gofile.io/contents/${code}?wt=4fd6sg89d7s6" 2>/dev/null && return 0
+    local body tok_file tok=""
+    body=$(gofile_api_contents "$code" 30)
+    tok_file=$(_gofile_lasttok_path)
+    [[ -s "$tok_file" ]] && tok=$(<"$tok_file")
+    [[ -z "$tok" && -n "${GOFILE_API_KEY:-}" ]] && tok="${GOFILE_API_KEY}"
+
+    local -a dl_urls=()
+    readarray -t dl_urls < <(jq -r '
+        if .status == "ok" then
+            [
+                (.data.link // empty),
+                (.data.children // {} | to_entries[]? | .value | select(.type == "file" and (.link // "") != "") | .link)
+            ] | unique | .[]
+        else empty end
+    ' <<< "$body" 2>/dev/null)
+
+    if (( ${#dl_urls[@]} == 0 )); then
+        log_warn "    Gofile: no direct file URL returned (cannot fake-refresh HTML shell)"
+        return 1
     fi
 
-    curl -s -o /dev/null --max-time 60 \
-        -r "0-10485759" \
-        -L "$url" 2>/dev/null
+    local dl_url any_ok=false
+    for dl_url in "${dl_urls[@]}"; do
+        local -a dl_headers=(-H "Referer: https://gofile.io/" -A "Mozilla/5.0")
+        [[ -n "$tok" ]] && dl_headers+=(-H "Cookie: accountToken=${tok}")
 
-    return $?
+        local meta http_code content_type eff_url
+        meta=$(curl -sS -L -o /dev/null --max-time 180 \
+            -r "0-10485759" \
+            "${dl_headers[@]}" \
+            -w '%{http_code}|%{content_type}|%{url_effective}' \
+            "$dl_url" 2>/dev/null) || continue
+
+        IFS='|' read -r http_code content_type eff_url <<< "$meta"
+        # Reject redirects back to the /d/ HTML page so only real file byte
+        # transfers count as resetting Gofile's 10-day inactivity clock.
+        if [[ "$http_code" =~ ^(200|206)$ ]] && [[ "${content_type,,}" != *text/html* ]] && [[ "$eff_url" != *gofile.io/d/* ]]; then
+            any_ok=true
+        else
+            log_warn "    Gofile: unexpected download response (code=${http_code:-?}, type=${content_type:-?})"
+        fi
+    done
+
+    [[ "$any_ok" == true ]] && return 0
+    return 1
 }
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -379,6 +409,57 @@ mark_dead_in_links_txt() {
         }' <<< "$links_content"
 }
 
+_record_dead_url() {
+    case "$1" in
+        gofile)     dead_gofile_urls+=("$2") ;;
+        pixeldrain) dead_pixeldrain_urls+=("$2") ;;
+        st0807)     dead_st0807_urls+=("$2") ;;
+        vikingfile) dead_vikingfile_urls+=("$2") ;;
+    esac
+}
+
+_refresh_provider_links() {
+    local provider="$1" step_msg="$2" refresh_fn="$3" ok_label="$4"
+    local sleep_min="$5" sleep_max="$6"
+    shift 6
+    local url rc
+
+    log_step "$step_msg"
+    for url in "$@"; do
+        # Skip already-expired links
+        if echo "$links_content" | grep -q "${url}.*\[EXPIRED\]"; then
+            log_info "  [skip] Already expired: $url"
+            continue
+        fi
+
+        (( ++total_checked ))
+        log_info "  [${total_checked}/${total_links}] Checking: $url"
+
+        rc=0
+        check_link_alive "$url" || rc=$?
+        if [[ "$rc" -eq 0 ]]; then
+            (( ++total_alive ))
+            if [[ "$dry_run" == "true" ]]; then
+                log_ok "    ✅ Alive, dry run, no refresh ping"
+            elif "$refresh_fn" "$url"; then
+                (( ++total_refreshed ))
+                log_ok "    ✅ Alive, ${ok_label}"
+            else
+                log_warn "    ⚠️ Alive but refresh failed"
+            fi
+        elif [[ "$rc" -eq 2 ]]; then
+            log_warn "    ⚠️ Unverifiable, skipping refresh and not marking expired"
+        else
+            (( ++total_dead ))
+            _record_dead_url "$provider" "$url"
+            updated_links=$(mark_dead_in_links_txt "$url" "$updated_links")
+            log_warn "    DEAD, link expired"
+        fi
+
+        random_sleep "$sleep_min" "$sleep_max"
+    done
+}
+
 # ═══════════════════════════════════════════════════════════════════════════════
 #  MAIN REFRESH ORCHESTRATOR
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -504,134 +585,28 @@ refresh_links() {
     local dead_gofile_urls=() dead_pixeldrain_urls=() dead_st0807_urls=() dead_vikingfile_urls=()
     local updated_links="$links_txt_content"
     
-    # ── Refresh Gofile links (1KB ping) ───────────────────────────────────────
+    # ── Refresh Gofile links (10MB direct download ping) ──────────────────────
     if [[ "$do_gofile" == true ]] && (( total_gofile > 0 )); then
-        log_step "Refreshing Gofile links (1KB ping)..."
-        
-        for url in "${gofile_urls[@]}"; do
-            # Skip already-expired links
-            if echo "$links_content" | grep -q "${url}.*\[EXPIRED\]"; then
-                log_info "  [skip] Already expired: $url"
-                continue
-            fi
-            
-            (( ++total_checked ))
-            log_info "  [${total_checked}/${total_links}] Checking: $url"
-            
-            if check_link_alive "$url"; then
-                (( ++total_alive ))
-                if [[ "$dry_run" == "true" ]]; then
-                    log_ok "    ✅ Alive, dry run, no refresh ping"
-                elif refresh_gofile "$url"; then
-                    (( ++total_refreshed ))
-                    log_ok "    ✅ Alive, timer reset (1KB)"
-                else
-                    log_warn "    ⚠️ Alive but refresh ping failed"
-                fi
-            else
-                (( ++total_dead ))
-                dead_gofile_urls+=("$url")
-                updated_links=$(mark_dead_in_links_txt "$url" "$updated_links")
-                log_warn "    DEAD, link expired"
-            fi
-            
-            random_sleep 1 3
-        done
+        _refresh_provider_links "gofile" "Refreshing Gofile links (10MB file ping)..." \
+            "refresh_gofile" "timer reset (10MB)" 1 3 "${gofile_urls[@]}"
     fi
-    
+
     # ── Refresh Pixeldrain links (10% download) ───────────────────────────────
     if [[ "$do_pixeldrain" == true ]] && (( total_pixeldrain > 0 )); then
-        log_step "Refreshing Pixeldrain links (10% download)..."
-        
-        for url in "${pixeldrain_urls[@]}"; do
-            # Skip already-expired links
-            if echo "$links_content" | grep -q "${url}.*\[EXPIRED\]"; then
-                log_info "  [skip] Already expired: $url"
-                continue
-            fi
-            
-            (( ++total_checked ))
-            log_info "  [${total_checked}/${total_links}] Checking: $url"
-            
-            if check_link_alive "$url"; then
-                (( ++total_alive ))
-                if [[ "$dry_run" == "true" ]]; then
-                    log_ok "    ✅ Alive, dry run, no refresh download"
-                elif refresh_pixeldrain "$url"; then
-                    (( ++total_refreshed ))
-                    log_ok "    ✅ Alive, timer reset (10% downloaded)"
-                else
-                    log_warn "    ⚠️ Alive but 10% download failed"
-                fi
-            else
-                (( ++total_dead ))
-                dead_pixeldrain_urls+=("$url")
-                updated_links=$(mark_dead_in_links_txt "$url" "$updated_links")
-                log_warn "    DEAD, link expired"
-            fi
-            
-            random_sleep 2 5
-        done
+        _refresh_provider_links "pixeldrain" "Refreshing Pixeldrain links (10% download)..." \
+            "refresh_pixeldrain" "timer reset (10% downloaded)" 2 5 "${pixeldrain_urls[@]}"
     fi
 
-    # ── Refresh 0807.st links (1KB ping) ──────────────────────────────────────
+    # ── Refresh DropDrive / 0807.st links (10MB ping) ─────────────────────────
     if [[ "$do_st0807" == true ]] && (( total_st0807 > 0 )); then
-        log_step "Refreshing 0807.st links (1KB ping)..."
-        for url in "${st0807_urls[@]}"; do
-            if echo "$links_content" | grep -q "${url}.*\[EXPIRED\]"; then
-                log_info "  [skip] Already expired: $url"
-                continue
-            fi
-            (( ++total_checked ))
-            log_info "  [${total_checked}/${total_links}] Checking: $url"
-            if check_link_alive "$url"; then
-                (( ++total_alive ))
-                if [[ "$dry_run" == "true" ]]; then
-                    log_ok "    ✅ Alive, dry run, no refresh ping"
-                elif refresh_st0807 "$url"; then
-                    (( ++total_refreshed ))
-                    log_ok "    ✅ Alive, timer reset (1KB)"
-                else
-                    log_warn "    ⚠️ Alive but refresh ping failed"
-                fi
-            else
-                (( ++total_dead ))
-                dead_st0807_urls+=("$url")
-                updated_links=$(mark_dead_in_links_txt "$url" "$updated_links")
-                log_warn "    DEAD, link expired"
-            fi
-            random_sleep 1 3
-        done
+        _refresh_provider_links "st0807" "Refreshing DropDrive / 0807.st links (10MB ping)..." \
+            "refresh_st0807" "timer reset (10MB)" 1 3 "${st0807_urls[@]}"
     fi
 
-    # ── Refresh VikingFile links (1KB ping + check-file) ──────────────────────
+    # ── Refresh VikingFile links (10MB ping + check-file) ─────────────────────
     if [[ "$do_vikingfile" == true ]] && (( total_vikingfile > 0 )); then
-        log_step "Refreshing VikingFile links (1KB ping)..."
-        for url in "${vikingfile_urls[@]}"; do
-            if echo "$links_content" | grep -q "${url}.*\[EXPIRED\]"; then
-                log_info "  [skip] Already expired: $url"
-                continue
-            fi
-            (( ++total_checked ))
-            log_info "  [${total_checked}/${total_links}] Checking: $url"
-            if check_link_alive "$url"; then
-                (( ++total_alive ))
-                if [[ "$dry_run" == "true" ]]; then
-                    log_ok "    ✅ Alive, dry run, no refresh ping"
-                elif refresh_vikingfile "$url"; then
-                    (( ++total_refreshed ))
-                    log_ok "    ✅ Alive, timer reset (1KB)"
-                else
-                    log_warn "    ⚠️ Alive but refresh ping failed"
-                fi
-            else
-                (( ++total_dead ))
-                dead_vikingfile_urls+=("$url")
-                updated_links=$(mark_dead_in_links_txt "$url" "$updated_links")
-                log_warn "    DEAD, link expired"
-            fi
-            random_sleep 1 3
-        done
+        _refresh_provider_links "vikingfile" "Refreshing VikingFile links (10MB ping)..." \
+            "refresh_vikingfile" "timer reset (10MB)" 1 3 "${vikingfile_urls[@]}"
     fi
     
     # ── Edit Discord messages for entries with dead links ─────────────────────

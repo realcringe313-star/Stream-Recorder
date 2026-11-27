@@ -16,40 +16,20 @@ REPAIR_DIR="${REPAIR_DIR:-/tmp/stream-repair}"
 FORCE_REPAIR="${FORCE_REPAIR:-false}"
 mkdir -p "$REPAIR_DIR"
 
+# Returns 0 alive, 1 dead/missing (re-upload), 2 unverifiable (leave alone).
 _is_gofile_alive() {
     local url="$1"
     [[ -z "$url" ]] && return 1
     # FORCE mode = always consider dead (force re-upload)
     [[ "${FORCE_REPAIR:-false}" == "true" ]] && return 1
-    # The Contents API (public website token — no account key, by policy
-    # 2026-09-02) is authoritative; /d/ pages return 200 even when expired
-    # (SPA shell). 2026-09-02: page-grep said "alive" for every dead folder.
-    local code status
-    code=$(sed -n 's#.*gofile\.io/d/\([^/?# ]*\).*#\1#p' <<< "$url" | head -1)
-    if [[ -n "$code" ]]; then
-        status=$(curl -s --max-time 20 \
-            "https://api.gofile.io/contents/${code}?wt=4fd6sg89d7s6" 2>/dev/null | jq -r '.status // "error"' 2>/dev/null)
-        case "$status" in
-            ok) return 0 ;;
-            *notFound*|*notfound*) return 1 ;;
-            *) : ;;  # token/network error → unverifiable, fall through to heuristic
-        esac
-    fi
-    # Gofile pages return HTTP 200 even when expired. Check actual content.
-    local page
-    page=$(curl -sL --max-time 20 "$url" 2>/dev/null) || return 1
-    # If page contains "not found" or "expired" or lacks download button, it's dead
-    if echo "$page" | grep -qiE "not found|file.*(removed|expired|deleted)|contentnotfound"; then
-        return 1
-    fi
-    # Also check if the page is basically empty / error page
-    local size=${#page}
-    # Check for known Gofile error indicators (more reliable than byte count)
-    if echo "$page" | grep -qiE "(page not found|file was deleted|removed|expired|404)"; then
-        return 1
-    fi
-    (( size < 300 )) && return 1
-    return 0
+    [[ -z "$(gofile_code_from_url "$url")" ]] && return 1
+    local state
+    state=$(gofile_check_state "$url" 20)
+    case "$state" in
+        alive) return 0 ;;
+        dead)  return 1 ;;
+        *)     return 2 ;;
+    esac
 }
 
 _is_pixeldrain_alive() {
@@ -67,13 +47,18 @@ _is_pixeldrain_alive() {
     [[ "$success" == "true" ]]
 }
 
+# Returns 0 alive, 1 dead/missing (re-upload), 2 unverifiable (leave alone).
 _is_st0807_alive() {
     local url="$1"
     [[ -z "$url" ]] && return 1
     [[ "${FORCE_REPAIR:-false}" == "true" ]] && return 1
-    local code
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 20 --range 0-1023 -L "$url" 2>/dev/null) || return 1
-    [[ "$code" =~ ^(2|3)[0-9]{2}$ ]]
+    local state
+    state=$(dropdrive_check_state "$url" 20)
+    case "$state" in
+        alive) return 0 ;;
+        dead)  return 1 ;;
+        *)     return 2 ;;
+    esac
 }
 
 # Returns 0 alive, 1 dead/missing (re-upload), 2 unverifiable (leave alone).
@@ -280,7 +265,12 @@ repair_mirrors() {
 
         local need_gofile=false need_pixel=false need_mega=false need_st0807=false need_viking=false
         if [[ "$destinations" == *gofile* ]]; then
-            _is_gofile_alive "$gofile_old" || need_gofile=true
+            local gofile_rc=0
+            _is_gofile_alive "$gofile_old" || gofile_rc=$?
+            case "$gofile_rc" in
+                1) need_gofile=true ;;
+                2) log_warn "  Gofile: API check unverifiable for ${gofile_old} — keeping the existing link (no re-upload)" ;;
+            esac
         fi
         if [[ "$destinations" == *pixeldrain* ]]; then
             _is_pixeldrain_alive "$pixel_old" || need_pixel=true
@@ -289,7 +279,12 @@ repair_mirrors() {
             if [[ "${FORCE_REPAIR:-false}" == "true" ]] || [[ -z "$mega_old" ]] || [[ "$mega_old" != *mega.nz* ]]; then need_mega=true; fi
         fi
         if [[ "$destinations" == *st0807* || "$destinations" == *0807* ]]; then
-            _is_st0807_alive "$st0807_old" || need_st0807=true
+            local st0807_rc=0
+            _is_st0807_alive "$st0807_old" || st0807_rc=$?
+            case "$st0807_rc" in
+                1) need_st0807=true ;;
+                2) log_warn "  DropDrive/0807: check unverifiable for ${st0807_old} — keeping the existing link (no re-upload)" ;;
+            esac
         fi
         if [[ "$destinations" == *vikingfile* || "$destinations" == *viking* ]]; then
             local viking_rc=0

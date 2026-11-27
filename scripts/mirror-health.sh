@@ -44,31 +44,11 @@ classify() {
 }
 
 # Gofile: the /d/<code> page returns 200 even for a deleted/expired folder, so
-# the page can't prove existence. Preferred: Contents API with the account key
-# (GOFILE_API_KEY). Fallback: the SAME API with the public website token (wt)
-# from gofile.io/js/wt.obf.js — but that file is obfuscated and the token
-# rotates, so a hardcoded wt usually returns "error-token" → unverifiable.
-# That is ACCEPTABLE by policy: gofile is disposable; it can satisfy the fast
-# side of the bar only when actually verifiable. Pixeldrain + GitHub releases
-# carry the fast side otherwise.
+# the page can't prove existence. Query Contents API via shared utils.sh helper
+# using guest account token + dynamic X-Website-Token from wt.obf.js.
 classify_gofile() {
-    local url="$1" code status
-    code=$(echo "$url" | sed -n 's#.*/d/\([^/?#]*\).*#\1#p')
-    if [[ -z "$code" ]]; then
-        printf 'unverifiable'; return
-    fi
-    # Public website token only — no account API key anywhere (owner policy
-    # 2026-09-02). A stale wt yields error-token → unverifiable, and the
-    # pixeldrain/github/archive classifiers still carry the verdict.
-    status=$(curl -sS --max-time "$CHECK_TIMEOUT" \
-        "https://api.gofile.io/contents/${code}?wt=4fd6sg89d7s6" 2>/dev/null \
-        | jq -r '.status // "error"' 2>/dev/null || echo error)
-    case "$status" in
-        ok) printf 'alive' ;;
-        # API returns "error-notFound" — glob the substring, never exact-match
-        *notFound*|*notfound*) printf 'dead' ;;
-        *) printf 'unverifiable' ;;
-    esac
+    local url="$1"
+    gofile_check_state "$url" "$CHECK_TIMEOUT"
 }
 
 # MEGA: the HTML page returns 200 whether or not the file exists (key is in
@@ -108,10 +88,11 @@ classify_gh() {
     classify "$url"
 }
 
-# 0807.st: direct file URLs. 200/206 = alive, 404/410 = dead.
+# DropDrive (/d/<code>) & 0807.st: shared checker handles DropDrive's HTTP-200
+# missing-file HTML shell as well as legacy direct URLs.
 classify_st0807() {
     local url="$1"
-    classify "$url"
+    dropdrive_check_state "$url" "$CHECK_TIMEOUT"
 }
 
 # VikingFile: check-file API with the /f/<hash> id.
